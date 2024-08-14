@@ -1,0 +1,265 @@
+;; Jetton Staking Pool Contract
+
+#include "imports/stdlib.fc";
+#include "imports/params.fc";
+#include "imports/op-codes.fc";
+#include "imports/jetton-utils.fc";
+
+const int ADDR_SIZE = 256; ;; bits
+
+(slice, cell, int, int, int, int, cell) load_data() inline {
+    slice ds = get_data().begin_parse();
+    ;; Global state variables
+    return (
+        ds~load_msg_addr(), ;; jetton_master_address
+        ds~load_ref(), ;; jetton_wallet_code
+        ds~load_uint(32), ;; Initial pool started timestamp in second
+        ds~load_coins(), ;; Total amount deposited in the pool
+        ds~load_coins(), ;; Total reward balance of the pool
+        ds~load_coins(), ;; Reward balance per second
+        ds~load_ref()  ;; Dictionary to store user deposits
+    );
+}
+
+() save_data(slice jetton_addr, cell jetton_wallet_code, int epoch_started_at, int total_deposited_amt, int total_reward_balance, int reward_per_second, cell deposits) impure inline {
+    set_data(begin_cell()
+            .store_slice(jetton_addr)
+            .store_ref(jetton_wallet_code)
+            .store_uint(epoch_started_at, 32)
+            .store_coins(total_deposited_amt)
+            .store_coins(total_reward_balance)
+            .store_coins(reward_per_second)
+            .store_ref(deposits)
+           .end_cell()
+    );
+}
+
+(slice, int) unpack_user_deposit(int addr_hash) inline_ref {
+    var (_, _, _, _, _, _, deposits) = load_data();
+
+    if (deposits.begin_parse().slice_empty?()) {
+        return (null().begin_parse(), 0);
+    };
+
+    (slice deposit_data, int found?) = deposits.udict_get?(ADDR_SIZE, addr_hash);
+
+    return (deposit_data, found?);
+}
+
+(slice) pack_user_deposit(int deposited_amt, int unclaimed_reward, int started_timestamp, int updated_timestamp) inline_ref {
+    slice deposit_builder = begin_cell()
+        .store_coins(deposited_amt) ;; user deposited amt
+        .store_coins(unclaimed_reward) ;; user unclaimed reward
+        .store_uint(started_timestamp, 32) ;; deposit started timestamp
+        .store_uint(updated_timestamp, 32) ;; deposit updated timestamp
+        .end_cell()
+        .begin_parse();
+
+    return deposit_builder;
+}
+
+;; Send TON frunction
+() send_grams(slice to_address, int amount, int send_mode) impure inline_ref {
+    if (to_address.preload_uint(2) != 0) {
+        var msg = begin_cell()
+        .store_uint(0x18, 6)
+        .store_slice(to_address)
+        .store_grams(amount)
+        .store_uint(0, 1 + 4 + 4 + 64 + 32 + 1 + 1)
+        .store_uint(0, 32)
+        .store_uint(0, 64);
+        send_raw_message(msg.end_cell(), send_mode);
+    }
+}
+
+;; Calculate reward function
+(int) calculate_reward(int deposit_amt, int timestamp_now, int last_updated_at, int total_deposited_amt, int reward_per_second) inline_ref {
+    ;; UnClaimedReward(U) = f(x) = \frac {userDeposit} {poolTotalDeposit} * (timeNow - lastUpdatedAt) * R + U_1
+    throw_unless(300, deposit_amt > 0);
+    throw_unless(301, (timestamp_now - last_updated_at) > 0);
+
+    return (deposit_amt / total_deposited_amt) * (timestamp_now - last_updated_at) * reward_per_second;
+}
+
+;; Receive fee from Jetton frunction
+() recevie_fee(int reward, int timestamp_now) impure {
+    ;; Reward(R)_2 = f(x)= \frac {R_1 + R} {timeNow - epochStartedAt}
+    var (jetton_addr, jetton_wallet_code, epoch_started_at, total_deposited_amt, total_reward_balance, reward_per_second, deposits) = load_data();
+
+    int new_total_reward_balance = total_reward_balance + reward;
+    int new_reward_per_second = new_total_reward_balance / (timestamp_now - epoch_started_at);
+
+    save_data(jetton_addr, jetton_wallet_code, epoch_started_at, total_deposited_amt, new_total_reward_balance, new_reward_per_second, deposits);
+}
+
+;; Deposit function
+(int, cell) deposit_jetton(slice sender_addr, slice in_msg_body) impure {
+    ;; Global state variables
+    var (jetton_addr, jetton_wallet_code, epoch_started_at, total_deposited_amt, total_reward_balance, reward_per_second, deposits) = load_data();
+
+    slice user_address = in_msg_body~load_msg_addr();
+    int jetton_amount = in_msg_body~load_coins();
+    int time_now = in_msg_body~load_uint(32);
+
+    ;; cell state_init = calculate_jetton_wallet_state_init(user_address, jetton_addr, jetton_wallet_code);
+    ;; slice jetton_wallet_address = calculate_jetton_wallet_address(state_init);
+
+    throw_unless(73, equal_slices(sender_addr, jetton_addr)); ;; Check if the caller is the jetton master contract
+
+    (int wc, int addr_hash) = parse_std_addr(user_address);
+    throw_unless(100, wc == 0);  ;; Example error if the workchain is incorrect
+
+    int user_deposit = 0;
+    int unclaimed_reward = 0;
+    int started_timestamp = time_now;
+    int updated_timestamp = time_now;
+
+    (slice deposit_data, int found?) = unpack_user_deposit(addr_hash);
+    if (found?) {
+        user_deposit = deposit_data~load_coins();
+        unclaimed_reward = deposit_data~load_coins();
+        started_timestamp = deposit_data~load_uint(32);
+        int last_updated_timestamp = deposit_data~load_uint(32);
+
+        int reward = calculate_reward(user_deposit, time_now, last_updated_timestamp, total_deposited_amt, reward_per_second);
+        unclaimed_reward += reward;
+        total_reward_balance -= reward;
+    }
+    user_deposit += jetton_amount;
+    total_deposited_amt += jetton_amount;
+
+    slice deposit_builder = pack_user_deposit(user_deposit, unclaimed_reward, started_timestamp, updated_timestamp);
+    deposits~udict_set(ADDR_SIZE, addr_hash, deposit_builder);
+
+    save_data(jetton_addr, jetton_wallet_code, epoch_started_at, total_deposited_amt, total_reward_balance, reward_per_second, deposits);
+
+    return (total_deposited_amt, deposits);
+}
+
+;; Claim reward function
+() claim_reward(slice sender_addr, int time_now) impure {
+    var (jetton_addr, jetton_wallet_code, epoch_started_at, total_deposited_amt, total_reward_balance, reward_per_second, deposits) = load_data();
+    
+    (int wc, int addr_hash) = parse_std_addr(sender_addr);
+    throw_unless(100, wc == 0);  ;; error if the workchain is incorrect
+    
+    (slice deposit_data, int found?) = unpack_user_deposit(addr_hash);
+    ~strdump("found");
+    ~dump(found?);
+    throw_unless(101, found? > 0);  ;; error if not found
+
+    int user_deposit = deposit_data~load_uint(128);
+    int unclaimed_reward = deposit_data~load_coins();
+    int started_timestamp = deposit_data~load_uint(32);
+    int last_updated_timestamp = deposit_data~load_uint(32);
+
+    int reward = calculate_reward(user_deposit, time_now, last_updated_timestamp, total_deposited_amt, reward_per_second);
+    int total_unclaimed_reward = unclaimed_reward + reward;
+    
+    total_reward_balance -= reward;
+    unclaimed_reward = 0;
+
+    slice deposit_builder = pack_user_deposit(user_deposit, unclaimed_reward, started_timestamp, time_now);
+    deposits~udict_set(ADDR_SIZE, addr_hash, deposit_builder);
+
+    save_data(jetton_addr, jetton_wallet_code, epoch_started_at, total_deposited_amt, total_reward_balance, reward_per_second, deposits);
+
+    ;; send TON to user
+    send_grams(sender_addr, total_unclaimed_reward, 1);
+    
+    return ();
+}
+
+;; Withdraw deposit function
+() withdraw_deposit(slice sender_addr, int time_now) impure {
+    var (jetton_addr, jetton_wallet_code, epoch_started_at, total_deposited_amt, total_reward_balance, reward_per_second, deposits) = load_data();
+    
+    (int wc, int addr_hash) = parse_std_addr(sender_addr);
+    throw_unless(100, wc == 0);  ;; error if the workchain is incorrect
+    
+    (slice deposit_data, int found?) = unpack_user_deposit(addr_hash);
+    ~strdump("found");
+    ~dump(found?);
+    throw_unless(101, found? > 0);  ;; error if not found
+
+    int user_deposit = deposit_data~load_uint(128);
+    int unclaimed_reward = deposit_data~load_coins();
+    int started_timestamp = deposit_data~load_uint(32);
+    int last_updated_timestamp = deposit_data~load_uint(32);
+
+    int reward = calculate_reward(user_deposit, time_now, last_updated_timestamp, total_deposited_amt, reward_per_second);
+    int total_unclaimed_reward = unclaimed_reward + reward;
+    
+    total_reward_balance -= reward;
+    unclaimed_reward = 0;
+
+    slice deposit_builder = pack_user_deposit(user_deposit, unclaimed_reward, started_timestamp, time_now);
+    deposits~udict_set(ADDR_SIZE, addr_hash, deposit_builder);
+
+    save_data(jetton_addr, jetton_wallet_code, epoch_started_at, total_deposited_amt, total_reward_balance, reward_per_second, deposits);
+}
+
+() recv_internal(int balance, int msg_value, cell in_msg_full, slice in_msg_body) impure {
+    slice cs = in_msg_full.begin_parse();
+    int flags = cs~load_uint(4);
+
+    slice sender_address = cs~load_msg_addr();
+    ~strdump("sender_address");
+    ~dump(sender_address);
+
+    if (flags & 1) { ;; ignore all bounced messages
+        return ();
+    }
+
+    int op = in_msg_body~load_uint(32);
+
+    if (op == op::jetton_pool_deposit()) {
+        deposit_jetton(sender_address, in_msg_body);
+    }
+
+    if (op == op::jetton_pool_receive_fee()) {
+        int reward = in_msg_body~load_uint(32);
+        int time_now = in_msg_body~load_uint(32);
+
+        ~strdump("reward");
+        ~dump(reward);
+        ~strdump("time_now");
+        ~dump(time_now);
+        recevie_fee(reward, time_now);
+    }
+
+    if (op == op::jetton_pool_claim()) {
+        int time_now = in_msg_body~load_uint(32);
+        claim_reward(sender_address, time_now);
+    }
+}
+
+int get_user_reward(slice user_address, int time_now) method_id {
+    var (_, _, _, total_deposited_amt, _, reward_per_second, deposits) = load_data();
+    
+    (int wc, int addr_hash) = parse_std_addr(user_address);
+    (slice deposit_data, int found?) = unpack_user_deposit(addr_hash);
+    
+    throw_unless(100, wc == 0);  ;; Example error if the workchain is incorrect
+    throw_unless(101, found? > 0);  ;; error if not found
+    
+    int user_deposit = deposit_data~load_uint(128);
+    int unclaimed_reward = deposit_data~load_coins();
+    int started_timestamp = deposit_data~load_uint(32);
+    int last_updated_timestamp = deposit_data~load_uint(32);
+
+    return calculate_reward(user_deposit, time_now, last_updated_timestamp, total_deposited_amt, reward_per_second);
+}
+
+slice get_user_deposit(slice user_address) method_id {
+    (int wc, int addr_hash) = parse_std_addr(user_address);
+
+    (slice deposit_data, int found?) = unpack_user_deposit(addr_hash);
+
+    return deposit_data;
+}
+
+(slice, cell, int, int, int, int, cell) get_staking_data() method_id {
+    var (jetton_addr, jetton_wallet_code, epoch_started_at, total_deposited_amt, total_reward_balance, reward_per_second, deposits) = load_data();
+    return (jetton_addr, jetton_wallet_code, epoch_started_at, total_deposited_amt, total_reward_balance, reward_per_second, deposits);
+}

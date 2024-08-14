@@ -1,0 +1,376 @@
+;; Jetton Contract
+
+#include "imports/stdlib.fc";
+#include "imports/op-codes.fc";
+#include "imports/params.fc";
+#include "imports/jetton-utils.fc";
+;; Jettons minter smart contract
+
+;; storage scheme
+;; storage#_ total_supply:Coins admin_address:MsgAddress content:^Cell jetton_wallet_code:^Cell = Storage;
+
+(int, int, slice, cell, cell, int, int, int) load_data() inline {
+  slice ds = get_data().begin_parse();
+  return (
+      ds~load_uint(64), ;; total_supply
+      ds~load_uint(64),  ;; circulating_supply
+      ds~load_msg_addr(), ;; admin_address
+      ds~load_ref(), ;; content
+      ds~load_ref(),  ;; jetton_wallet_code
+      ds~load_uint(64),  ;; midpoint_supply
+      ds~load_coins(),  ;; max_price
+      ds~load_uint(8)  ;; steepness
+  );
+}
+
+() save_data(int total_supply, int circulating_supply, slice admin_address, cell content, cell jetton_wallet_code, int midpoint_supply, int max_price, int steepness) impure inline {
+  set_data(begin_cell()
+            .store_uint(total_supply, 64)
+            .store_uint(circulating_supply, 64)
+            .store_slice(admin_address)
+            .store_ref(content)
+            .store_ref(jetton_wallet_code)
+            .store_uint(midpoint_supply, 64)
+            .store_coins(max_price)
+            .store_uint(steepness, 8)
+           .end_cell()
+          );
+}
+
+;; Define a DECIMAL_FACTOR factor for fixed-point calculations
+const int DECIMAL_FACTOR = 1000000000; ;; 1 TON
+;; const int SCALING_FACTOR = 100000;
+const int EXPONENTIAL_E = 271828;
+const int NETWORK_FEE_RATE = 5; ;; 5%
+
+;; Approximation of e^(-kx) using a lookup table or a series expansion
+int exp_neg(int k, int x, int x_0) {
+    int result = EXPONENTIAL_E;
+
+    int diff = (x - x_0);
+    if (diff == 0) {
+      return result;
+    }
+
+    ;; TODO
+    ;; For simplicity, using a basic approximation. Refine this with a better approximation.
+    int exp = -(k * diff) / 10000;
+
+    ;; Series expansion for e^(-kx)
+    int i = 1;
+    while (i <= 12) {
+      i += 1;
+      result += (exp / i);
+    }
+
+    if (result < 0) {
+      result = 1;
+    }
+
+    return result;
+}
+
+;; Function to calculate the custom formula
+int sigmoid(int k, int x, int x_0, int max_price) {
+    ;; Calculate exp_result using the exp function
+    int exp_result = exp_neg(k, x, x_0);
+    return (max_price * EXPONENTIAL_E) / (EXPONENTIAL_E + exp_result);
+}
+
+int calculate_price(int amount) inline {
+  var (_, circulating_supply, _, _, _, midpoint_supply, max_price, steepness) = load_data();
+  int jettonAmt = circulating_supply + amount;
+
+  return (amount * sigmoid(steepness, jettonAmt, midpoint_supply, max_price)) / EXPONENTIAL_E; ;; calculate price based on sigmoid function
+}
+
+() transfer_buy_tokens(slice sender_address, int jettonAmt, cell jetton_wallet_code, int value) impure {
+  ;; BUY jettons
+  cell state_init = calculate_jetton_wallet_state_init(sender_address, my_address(), jetton_wallet_code);
+  slice jetton_wallet_address = calculate_jetton_wallet_address(state_init);
+  slice from_wallet_address = my_address();
+  slice to_wallet_address = sender_address;
+
+  var master_msg = begin_cell()
+            .store_uint(op::internal_transfer(), 32)
+            .store_uint(0, 64) ;; quert_id
+            .store_coins(jettonAmt)
+            .store_slice(to_wallet_address) ;; from_address
+            .store_slice(to_wallet_address) ;; response_address
+            .store_coins(10000000) ;; forward_amount
+            .store_uint(0, 1) ;; forward_payload in this slice, not separate cell
+            .end_cell();
+
+  var msg = begin_cell()
+    .store_uint(0x18, 6)
+    .store_slice(jetton_wallet_address)
+    .store_coins(value) ;; for transferToJWallet
+    .store_uint(4 + 2 + 1, 1 + 4 + 4 + 64 + 32 + 1 + 1 + 1)
+    .store_ref(state_init)
+    .store_ref(master_msg);
+
+  send_raw_message(msg.end_cell(), 1); ;; pay transfer fees separately, revert on errors
+}
+
+() send_ton(slice seller_address, int tonAmt) impure {
+  ;; SEND jettons
+  if (seller_address.preload_uint(2) != 0) {
+    var msg = begin_cell()
+      .store_uint(0x18, 6) ;; nobounce - int_msg_info$0 ihr_disabled:Bool bounce:Bool bounced:Bool src:MsgAddress -> 011000
+      .store_slice(seller_address)
+      .store_coins(tonAmt)
+      .store_uint(0, 1 + 4 + 4 + 64 + 32 + 1 + 1);
+
+    send_raw_message(msg.end_cell(), 1);
+  }
+  return ();
+}
+
+() send_to_stake (slice staking_address, slice sender_address, int jetton_amount, int time_now, int value) impure {
+  if (staking_address.preload_uint(2) != 0) {
+
+    var msg_body = begin_cell()
+      .store_uint(op::jetton_pool_deposit(), 32)
+      .store_uint(1, 64)
+      .store_slice(sender_address)
+      .store_coins(jetton_amount)
+      .store_uint(time_now, 32)
+      .store_slice(staking_address) ;; response_address
+      .store_coins(10000000) ;; forward_amount
+      .store_uint(0, 1) ;; forward_payload in this slice, not separate cell
+      .end_cell();
+
+    var msg = begin_cell()
+      .store_uint(0x18, 6)
+      .store_slice(staking_address)
+      .store_coins(value)
+      .store_uint(0, 1 + 4 + 4 + 64 + 32 + 1 + 1)
+      .store_uint(1, 1) ;; set bit to 1 to indicate that the cell will go on
+      .store_ref(msg_body);
+
+    send_raw_message(msg.end_cell(), 17);
+  }
+}
+
+() transfer_sell_tokens(slice sender_address, int jettonAmt, int tonAmt, int value, cell jetton_wallet_code) impure {
+  ;; SELL jettons
+  cell state_init = calculate_jetton_wallet_state_init(sender_address, my_address(), jetton_wallet_code);
+  slice jetton_wallet = calculate_jetton_wallet_address(state_init);
+  
+  var master_msg = begin_cell()
+            .store_uint(op::sell_token(), 32)
+            .store_uint(0, 64) ;; quert_id
+            .store_coins(jettonAmt)
+            .store_slice(my_address())
+            .store_slice(sender_address) ;; response_address
+            .store_uint(0, 1) ;; custom_payload:(Maybe ^Cell)
+            .store_coins(10000000) ;; forward_amount
+            .store_uint(0, 1) ;; forward_payload in this slice, not separate cell
+            .end_cell();
+
+  var msg = begin_cell()
+    .store_uint(0x10, 6) ;; NON_BOUNCEABLE
+    .store_slice(jetton_wallet) ;; jetton seller
+    .store_coins(value) ;; for transferToJWallet
+    .store_uint(4 + 2 + 1, 1 + 4 + 4 + 64 + 32 + 1 + 1 + 1)
+    .store_ref(state_init)
+    .store_ref(master_msg);
+
+  send_raw_message(msg.end_cell(), 1); ;; pay transfer fees separately, revert on errors
+
+  ;; send back TON to seller
+  send_ton(sender_address, tonAmt);
+}
+
+() buy_tokens(int msg_value, slice sender_address, int amount) impure {
+  ;; Calculate the cost using sigmoid bonding curve
+  int cost = calculate_price(amount);
+
+  int fee = cost * NETWORK_FEE_RATE / 100;
+  int totalCost = cost + fee;
+  int value = msg_value - totalCost;
+
+  ;; Transfer TON from buyer to the contract
+  ;; throw if not enough msg_value
+  throw_unless(76, value > 0);
+
+  ;; Transfer tokens from contract to buyer
+  var (total_supply, circulating_supply, admin_address, content, jetton_wallet_code, midpoint_supply, max_price, steepness) = load_data();
+
+  transfer_buy_tokens(sender_address, amount, jetton_wallet_code, value);
+
+  ;; Increase circulating supply
+  circulating_supply += amount;
+  save_data(total_supply, circulating_supply, admin_address, content, jetton_wallet_code, midpoint_supply, max_price, steepness);
+}
+
+() sell_tokens(int msg_value, slice sender_address, int amount) impure {
+  ;; Calculate the cost using sigmoid bonding curve
+  int cost = calculate_price(amount);
+
+  ;; Transfer tokens from contract to buyer
+  var (total_supply, circulating_supply, admin_address, content, jetton_wallet_code, midpoint_supply, max_price, steepness) = load_data();
+  int jettonAmt = (DECIMAL_FACTOR * amount);
+
+  int fee = cost * NETWORK_FEE_RATE / 100;
+  int value = msg_value - fee;
+
+  transfer_sell_tokens(sender_address, amount, cost, value, jetton_wallet_code);
+
+  ;; Increase circulating supply
+  circulating_supply -= amount;
+  save_data(total_supply, circulating_supply, admin_address, content, jetton_wallet_code, midpoint_supply, max_price, steepness);
+}
+
+() stake_tokens(int msg_value, slice sender_address, int amount, slice staking_address, int time_now) impure {
+  ;; Protocol fee
+  int forwardFee = 10000000;
+  int jettonWalletFee = 100000000;
+  int value = msg_value - forwardFee - jettonWalletFee;
+
+  var (_, _, _, _, jetton_wallet_code, _, _, _) = load_data();
+
+  cell state_init = calculate_jetton_wallet_state_init(sender_address, my_address(), jetton_wallet_code);
+  slice jetton_wallet = calculate_jetton_wallet_address(state_init);
+  
+  var master_msg = begin_cell()
+            .store_uint(op::transfer(), 32)
+            .store_uint(0, 64) ;; quert_id
+            .store_coins(amount)
+            .store_slice(staking_address)
+            .store_slice(sender_address) ;; response_address
+            .store_uint(0, 1) ;; custom_payload:(Maybe ^Cell)
+            .store_coins(forwardFee) ;; forward_amount
+            .store_uint(0, 1) ;; forward_payload in this slice, not separate cell
+            .end_cell();
+
+  var msg = begin_cell()
+    .store_uint(0x10, 6) ;; NON_BOUNCEABLE
+    .store_slice(jetton_wallet) ;; jetton seller
+    .store_coins(jettonWalletFee) ;; for transferToJWallet
+    .store_uint(4 + 2 + 1, 1 + 4 + 4 + 64 + 32 + 1 + 1 + 1)
+    .store_ref(state_init)
+    .store_ref(master_msg);
+
+  send_raw_message(msg.end_cell(), 1); ;; pay transfer fees separately, revert on errors
+
+  ;; send to staking contract
+  send_to_stake(staking_address, sender_address, amount, time_now, value);
+}
+
+() mint_tokens(slice to_address, cell jetton_wallet_code, int amount, cell master_msg) impure {
+  var (_, _, admin_address, _, _, _, _, _) = load_data();
+  ;; Check if the caller is the contract owner
+  throw_unless(73, equal_slices(to_address, admin_address));
+
+  cell state_init = calculate_jetton_wallet_state_init(to_address, my_address(), jetton_wallet_code);
+  slice to_wallet_address = calculate_jetton_wallet_address(state_init);
+  var msg = begin_cell()
+    .store_uint(0x18, 6)
+    .store_slice(to_wallet_address)
+    .store_coins(amount)
+    .store_uint(4 + 2 + 1, 1 + 4 + 4 + 64 + 32 + 1 + 1 + 1)
+    .store_ref(state_init)
+    .store_ref(master_msg);
+  send_raw_message(msg.end_cell(), 1); ;; pay transfer fees separately, revert on errors
+}
+
+() recv_internal(int msg_value, cell in_msg_full, slice in_msg_body) impure {
+    slice cs = in_msg_full.begin_parse();
+    int flags = cs~load_uint(4);
+
+    if (flags & 1) { ;; ignore all bounced messages
+        return ();
+    }
+    slice sender_address = cs~load_msg_addr();
+
+    (int total_supply, int circulating_supply, slice admin_address, cell content, cell jetton_wallet_code, int midpoint_supply, int max_price, int steepness) = load_data();
+
+    int op = in_msg_body~load_uint(32);
+    int query_id = in_msg_body~load_uint(64);
+
+    if (op == op::update_bonding_curve_data()) {
+      int new_midpoint_supply = in_msg_body~load_uint(64);
+      int new_max_price = in_msg_body~load_coins();
+      int new_steepness = in_msg_body~load_uint(8);
+      save_data(total_supply, circulating_supply, admin_address, content, jetton_wallet_code, new_midpoint_supply, new_max_price, new_steepness);
+      return ();
+    }
+
+    if (op == op::buy_token()) {
+        int amount = in_msg_body~load_coins();
+        buy_tokens(msg_value, sender_address, amount);
+        return ();
+    }
+
+    ;; sell jetton to get back Ton
+    if (op == op::sell_token()) {
+        int amount = in_msg_body~load_coins();
+        sell_tokens(msg_value, sender_address, amount);
+        return ();
+    }
+
+    ;; stake jetton
+    if (op == op::deposit_token()) {
+        int jetton_amount = in_msg_body~load_coins();
+        slice staking_address = in_msg_body~load_msg_addr();
+        int time_now = in_msg_body~load_uint(32);
+        stake_tokens(msg_value, sender_address, jetton_amount, staking_address, time_now);
+        return ();
+    }
+
+    if (op == op::mint()) {
+        throw_unless(73, equal_slices(sender_address, admin_address));
+        slice to_address = in_msg_body~load_msg_addr();
+        int amount = in_msg_body~load_coins();
+        cell master_msg = in_msg_body~load_ref();
+        slice master_msg_cs = master_msg.begin_parse();
+        master_msg_cs~skip_bits(32 + 64); ;; op + query_id
+        int jetton_amount = master_msg_cs~load_coins();
+
+        mint_tokens(to_address, jetton_wallet_code, amount, master_msg);
+        save_data(total_supply + jetton_amount, 0, admin_address, content, jetton_wallet_code, midpoint_supply, max_price, steepness);
+        return ();
+    }
+
+    if (op == op::burn_notification()) {
+        int jetton_amount = in_msg_body~load_coins();
+        slice from_address = in_msg_body~load_msg_addr();
+        throw_unless(74,
+            equal_slices(calculate_user_jetton_wallet_address(from_address, my_address(), jetton_wallet_code), sender_address)
+        );
+        save_data(total_supply - jetton_amount, 0, admin_address, content, jetton_wallet_code, midpoint_supply, max_price, steepness);
+        slice response_address = in_msg_body~load_msg_addr();
+        if (response_address.preload_uint(2) != 0) {
+          var msg = begin_cell()
+            .store_uint(0x10, 6) ;; nobounce - int_msg_info$0 ihr_disabled:Bool bounce:Bool bounced:Bool src:MsgAddress -> 011000
+            .store_slice(response_address)
+            .store_coins(0)
+            .store_uint(0, 1 + 4 + 4 + 64 + 32 + 1 + 1)
+            .store_uint(op::excesses(), 32)
+            .store_uint(query_id, 64);
+          send_raw_message(msg.end_cell(), 2 + 64);
+        }
+        return ();
+    }
+
+    ;;throw(0xffff);
+}
+
+(int, int, slice, cell, cell, int, int, int, int) get_jetton_data() method_id {
+    (int total_supply, int circulating_supply, slice admin_address, cell content, cell jetton_wallet_code, int midpoint_supply, int max_price, int steepness) = load_data();
+    return (total_supply, -1, admin_address, content, jetton_wallet_code, circulating_supply, midpoint_supply, max_price, steepness);
+}
+
+slice get_wallet_address(slice owner_address) method_id {
+    (int total_supply, int circulating_supply, slice admin_address, cell content, cell jetton_wallet_code, int midpoint_supply, int max_price, int steepness) = load_data();
+    return calculate_user_jetton_wallet_address(owner_address, my_address(), jetton_wallet_code);
+}
+
+int get_token_price(int amt) method_id {
+    return calculate_price(amt);
+}
+
+int get_exp(int k, int x, int x_0) method_id {
+  return exp_neg(k, x, x_0);
+}
