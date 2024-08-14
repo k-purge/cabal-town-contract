@@ -6,7 +6,7 @@ export const toncenter = new TonClient({
   endpoint: "https://testnet.toncenter.com/api/v2/jsonRPC",
 });
 
-export const jettonAddress = Address.parse('EQCD6lITaOdUkIRibdZTda4gUHi20J1Go7yGkKARA3kCUv9X');
+export const jettonAddress = Address.parse(process.env.JETTON_ADDRESS);
 //https://tonscan.org/jetton/EQD0vdSA_NedR9uvbgN9EikRX-suesDxGeFg69XQMavfLqIw
 const OFF_CHAIN_CONTENT_PREFIX = 0x01;
 

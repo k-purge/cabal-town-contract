@@ -6,7 +6,7 @@ export const toncenter = new TonClient({
 	endpoint: 'https://toncenter.com/api/v2/jsonRPC',
 });
 
-export const nftCollectionAddress = Address.parse('EQD0vdSA_NedR9uvbgN9EikRX-suesDxGeFg69XQMavfLqIw');
+export const jettonAddress = Address.parse(process.env.JETTON_ADDRESS);
 //https://tonscan.org/jetton/EQD0vdSA_NedR9uvbgN9EikRX-suesDxGeFg69XQMavfLqIw
 
 const OFF_CHAIN_CONTENT_PREFIX = 0x01
@@ -47,7 +47,7 @@ export function decodeOffChainContent(content: Cell) {
 export async function getJettonData() {
 
 	let { stack } = await toncenter.callGetMethod(
-		nftCollectionAddress, 
+		jettonAddress, 
 		'get_jetton_data'
 	);
 	//(int total_supply, int mintable, slice admin_address, cell jetton_content, cell jetton_wallet_code)

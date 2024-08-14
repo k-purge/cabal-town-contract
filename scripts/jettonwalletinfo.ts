@@ -7,7 +7,7 @@ const toncenter = new TonClient({
 });
 
 //your jetton wallet Address
-const jettonWalletAddress = Address.parse('EQCi5w5TeyM2M2vqes7kPICQGGi80XXlehTTw-FsBPfrWVjs');
+const jettonWalletAddress = Address.parse(process.env.JETTON_WALLET_ADDRESS);
 
 async function getJettonWalletData() {
 
