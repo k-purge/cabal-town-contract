@@ -1,0 +1,33 @@
+int op::transfer() asm "0xf8a7ea5 PUSHINT"; ;; outgoing transfer
+int op::transfer_notification() asm "0x7362d09c PUSHINT";
+int op::internal_transfer() asm "0x178d4519 PUSHINT"; ;;incoming transfer
+int op::excesses() asm "0xd53276db PUSHINT";
+int op::burn() asm "0x595f07bc PUSHINT";
+int op::burn_notification() asm "0x7bdd97de PUSHINT";
+int op::withdraw_tons() asm "0x6d8e5e3c PUSHINT";
+int op::withdraw_jettons() asm "0x768a50b2 PUSHINT";
+int op::transfer_reward_balance() asm "0x9424561E PUSHINT";
+
+;; Minter
+int op::mint() asm "21 PUSHINT";
+int op::buy_token() asm "31 PUSHINT";
+int op::update_bonding_curve_data() asm "41 PUSHINT";
+int op::sell_token() asm "51 PUSHINT";
+int op::deposit_token() asm "61 PUSHINT";
+int op::withdraw_token() asm "71 PUSHINT";
+
+;; Pool
+int op::jetton_pool_receive_fee() asm "100 PUSHINT";
+int op::jetton_pool_deposit() asm "101 PUSHINT";
+int op::jetton_pool_withdraw() asm "102 PUSHINT";
+int op::jetton_pool_claim() asm "103 PUSHINT";
+
+;;
+int op::bounce() asm "0xffffffff PUSHINT";
+
+;; 
+(slice, (int)) ~load_op(slice s) inline { return s.load_uint(32); }
+(slice, (int)) ~load_query_id(slice s) inline { return s.load_uint(64); }
+builder store_op(builder b, int op) inline { return b.store_uint(op, 32); }
+builder store_query_id(builder b, int query_id) inline { return b.store_uint(query_id, 64); }
+

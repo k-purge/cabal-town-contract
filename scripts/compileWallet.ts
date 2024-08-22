@@ -16,12 +16,12 @@ async function compileScript() {
         process.exit(1);
     }
 
-    const hexBoC = 'build/wallet.compiled.json';
+    const hexBoC = 'build/jetton-wallet.compiled.json';
 
     fs.writeFileSync(
         hexBoC,
         JSON.stringify({
-            walletHex: Cell.fromBoc(Buffer.from(compileResult.codeBoc,"base64"))[0]
+            hex: Cell.fromBoc(Buffer.from(compileResult.codeBoc,"base64"))[0]
                 .toBoc()
                 .toString("hex"),
         })

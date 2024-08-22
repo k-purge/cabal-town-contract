@@ -7,7 +7,7 @@ import { compileFunc } from "@ton-community/func-js";
 async function compileScript() {
 
     const compileResult = await compileFunc({
-        targets: ["./contracts/jetton-minter-ICO.fc"], 
+        targets: ["./contracts/jetton-minter.fc"], 
         sources: (path) => readFileSync(path).toString("utf8"),
     });
 
@@ -16,7 +16,7 @@ async function compileScript() {
         process.exit(1);
     }
 
-    const hexBoC = 'build/master.compiled.json';
+    const hexBoC = 'build/jetton-master.compiled.json';
 
     fs.writeFileSync(
         hexBoC,

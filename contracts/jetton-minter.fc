@@ -1,8 +1,10 @@
 ;; Jetton Contract
 
 #include "imports/stdlib.fc";
-#include "imports/op-codes.fc";
 #include "imports/params.fc";
+#include "imports/op-codes.fc";
+#include "imports/error-codes.fc";
+#include "imports/messages.fc";
 #include "imports/jetton-utils.fc";
 ;; Jettons minter smart contract
 
@@ -36,12 +38,6 @@
            .end_cell()
           );
 }
-
-;; Define a DECIMAL_FACTOR factor for fixed-point calculations
-const int DECIMAL_FACTOR = 1000000000; ;; 1 TON
-;; const int SCALING_FACTOR = 100000;
-const int EXPONENTIAL_E = 271828;
-const int NETWORK_FEE_RATE = 5; ;; 5%
 
 ;; Approximation of e^(-kx) using a lookup table or a series expansion
 int exp_neg(int k, int x, int x_0) {
@@ -109,47 +105,21 @@ int calculate_price(int amount) inline {
     .store_ref(state_init)
     .store_ref(master_msg);
 
-  send_raw_message(msg.end_cell(), 1); ;; pay transfer fees separately, revert on errors
+  send_raw_message(msg.end_cell(), sendmode::PAY_FEES_SEPARATELY); ;; pay transfer fees separately, revert on errors
 }
 
-() send_ton(slice seller_address, int tonAmt) impure {
+() send_ton(slice to_address, int tonAmt) impure {
   ;; SEND jettons
-  if (seller_address.preload_uint(2) != 0) {
+  if (to_address.preload_uint(2) != 0) {
     var msg = begin_cell()
       .store_uint(0x18, 6) ;; nobounce - int_msg_info$0 ihr_disabled:Bool bounce:Bool bounced:Bool src:MsgAddress -> 011000
-      .store_slice(seller_address)
+      .store_slice(to_address)
       .store_coins(tonAmt)
       .store_uint(0, 1 + 4 + 4 + 64 + 32 + 1 + 1);
 
-    send_raw_message(msg.end_cell(), 1);
+    send_raw_message(msg.end_cell(), sendmode::PAY_FEES_SEPARATELY);
   }
   return ();
-}
-
-() send_to_stake (slice staking_address, slice sender_address, int jetton_amount, int time_now, int value) impure {
-  if (staking_address.preload_uint(2) != 0) {
-
-    var msg_body = begin_cell()
-      .store_uint(op::jetton_pool_deposit(), 32)
-      .store_uint(1, 64)
-      .store_slice(sender_address)
-      .store_coins(jetton_amount)
-      .store_uint(time_now, 32)
-      .store_slice(staking_address) ;; response_address
-      .store_coins(10000000) ;; forward_amount
-      .store_uint(0, 1) ;; forward_payload in this slice, not separate cell
-      .end_cell();
-
-    var msg = begin_cell()
-      .store_uint(0x18, 6)
-      .store_slice(staking_address)
-      .store_coins(value)
-      .store_uint(0, 1 + 4 + 4 + 64 + 32 + 1 + 1)
-      .store_uint(1, 1) ;; set bit to 1 to indicate that the cell will go on
-      .store_ref(msg_body);
-
-    send_raw_message(msg.end_cell(), 17);
-  }
 }
 
 () transfer_sell_tokens(slice sender_address, int jettonAmt, int tonAmt, int value, cell jetton_wallet_code) impure {
@@ -176,7 +146,7 @@ int calculate_price(int amount) inline {
     .store_ref(state_init)
     .store_ref(master_msg);
 
-  send_raw_message(msg.end_cell(), 1); ;; pay transfer fees separately, revert on errors
+  send_raw_message(msg.end_cell(), sendmode::PAY_FEES_SEPARATELY); ;; pay transfer fees separately, revert on errors
 
   ;; send back TON to seller
   send_ton(sender_address, tonAmt);
@@ -222,42 +192,6 @@ int calculate_price(int amount) inline {
   save_data(total_supply, circulating_supply, admin_address, content, jetton_wallet_code, midpoint_supply, max_price, steepness);
 }
 
-() stake_tokens(int msg_value, slice sender_address, int amount, slice staking_address, int time_now) impure {
-  ;; Protocol fee
-  int forwardFee = 10000000;
-  int jettonWalletFee = 100000000;
-  int value = msg_value - forwardFee - jettonWalletFee;
-
-  var (_, _, _, _, jetton_wallet_code, _, _, _) = load_data();
-
-  cell state_init = calculate_jetton_wallet_state_init(sender_address, my_address(), jetton_wallet_code);
-  slice jetton_wallet = calculate_jetton_wallet_address(state_init);
-  
-  var master_msg = begin_cell()
-            .store_uint(op::transfer(), 32)
-            .store_uint(0, 64) ;; quert_id
-            .store_coins(amount)
-            .store_slice(staking_address)
-            .store_slice(sender_address) ;; response_address
-            .store_uint(0, 1) ;; custom_payload:(Maybe ^Cell)
-            .store_coins(forwardFee) ;; forward_amount
-            .store_uint(0, 1) ;; forward_payload in this slice, not separate cell
-            .end_cell();
-
-  var msg = begin_cell()
-    .store_uint(0x10, 6) ;; NON_BOUNCEABLE
-    .store_slice(jetton_wallet) ;; jetton seller
-    .store_coins(jettonWalletFee) ;; for transferToJWallet
-    .store_uint(4 + 2 + 1, 1 + 4 + 4 + 64 + 32 + 1 + 1 + 1)
-    .store_ref(state_init)
-    .store_ref(master_msg);
-
-  send_raw_message(msg.end_cell(), 1); ;; pay transfer fees separately, revert on errors
-
-  ;; send to staking contract
-  send_to_stake(staking_address, sender_address, amount, time_now, value);
-}
-
 () mint_tokens(slice to_address, cell jetton_wallet_code, int amount, cell master_msg) impure {
   var (_, _, admin_address, _, _, _, _, _) = load_data();
   ;; Check if the caller is the contract owner
@@ -272,10 +206,14 @@ int calculate_price(int amount) inline {
     .store_uint(4 + 2 + 1, 1 + 4 + 4 + 64 + 32 + 1 + 1 + 1)
     .store_ref(state_init)
     .store_ref(master_msg);
-  send_raw_message(msg.end_cell(), 1); ;; pay transfer fees separately, revert on errors
+  send_raw_message(msg.end_cell(), sendmode::PAY_FEES_SEPARATELY); ;; pay transfer fees separately, revert on errors
 }
 
-() recv_internal(int msg_value, cell in_msg_full, slice in_msg_body) impure {
+() recv_internal(int my_balance, int msg_value, cell in_msg_full, slice in_msg_body) impure {
+    if (in_msg_body.slice_empty?()) { ;; ignore empty messages
+        return ();
+    }
+    
     slice cs = in_msg_full.begin_parse();
     int flags = cs~load_uint(4);
 
@@ -310,15 +248,6 @@ int calculate_price(int amount) inline {
         return ();
     }
 
-    ;; stake jetton
-    if (op == op::deposit_token()) {
-        int jetton_amount = in_msg_body~load_coins();
-        slice staking_address = in_msg_body~load_msg_addr();
-        int time_now = in_msg_body~load_uint(32);
-        stake_tokens(msg_value, sender_address, jetton_amount, staking_address, time_now);
-        return ();
-    }
-
     if (op == op::mint()) {
         throw_unless(73, equal_slices(sender_address, admin_address));
         slice to_address = in_msg_body~load_msg_addr();
@@ -349,12 +278,57 @@ int calculate_price(int amount) inline {
             .store_uint(0, 1 + 4 + 4 + 64 + 32 + 1 + 1)
             .store_uint(op::excesses(), 32)
             .store_uint(query_id, 64);
-          send_raw_message(msg.end_cell(), 2 + 64);
+          send_raw_message(msg.end_cell(), sendmode::IGNORE_ERRORS + sendmode::CARRY_ALL_REMAINING_MESSAGE_VALUE);
         }
         return ();
     }
 
-    ;;throw(0xffff);
+    ;; Withdraw tons fee to staking address
+    if (op == op::transfer_reward_balance()) {
+      throw_unless(error::unauthorized_transfer, equal_slices(admin_address, sender_address));
+      raw_reserve(wallet_min_ton_balance, 0);
+
+      slice staking_address = in_msg_body~load_msg_addr();
+
+      int rewardBalance = (my_balance - wallet_min_ton_balance) * NETWORK_FEE_RATE / 100;
+      
+      var master_msg = begin_cell()
+            .store_uint(op::jetton_pool_receive_fee(), 32)
+            .store_uint(query_id, 64) ;; quert_id
+            .store_uint(rewardBalance, 32) ;; reward
+            .store_slice(sender_address) ;; response_address
+            .store_uint(0, 1) ;; custom_payload:(Maybe ^Cell)
+            .store_coins(FORWARD_FEE) ;; forward_amount
+            .store_uint(0, 1) ;; forward_payload in this slice, not separate cell
+            .end_cell();
+
+      var msg = begin_cell()
+              .store_msg_flag(msgflag::BOUNCEABLE)
+              .store_slice(staking_address)
+              .store_coins(0)
+              .store_uint(1, 1 + 4 + 4 + 64 + 32 + 1 + 1)
+              .store_ref(master_msg);
+      send_raw_message(msg.end_cell(), sendmode::CARRY_ALL_REMAINING_MESSAGE_VALUE);
+
+      ;; send reward TON to staking
+      return send_ton(staking_address, rewardBalance);
+    }
+
+    ;; Withdraw tons or jettons which accidentally were sent to this jettonWallet
+    if (op == op::withdraw_tons()) {
+      throw_unless(error::unauthorized_transfer, equal_slices(admin_address, sender_address));
+      raw_reserve(wallet_min_ton_balance, 0);
+      var msg = begin_cell()
+              .store_msg_flag(msgflag::BOUNCEABLE)
+              .store_slice(admin_address)
+              .store_coins(0)
+              .store_msgbody_prefix_slice()
+              .store_op(op::excesses())
+              .store_query_id(in_msg_body~load_query_id());
+      return send_raw_message(msg.end_cell(), sendmode::CARRY_ALL_BALANCE | sendmode::IGNORE_ERRORS);
+    }
+
+    throw(0xffff);
 }
 
 (int, int, slice, cell, cell, int, int, int, int) get_jetton_data() method_id {
