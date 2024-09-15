@@ -15,10 +15,11 @@ const int wallet_min_ton_balance = 100000000; ;; 0.1 TON
 const int ADDR_SIZE = 256; ;; bits
 ;; Define a DECIMAL_FACTOR factor for fixed-point calculations
 const int DECIMAL_FACTOR = 1000000000; ;; 1 TON
-;; const int SCALING_FACTOR = 100000;
 const int EXPONENTIAL_E = 271828;
 const int NETWORK_FEE_RATE = 5; ;; 5%
 const int FORWARD_FEE = 10000000; ;; 0.01 TON
+const int RATE_SCALER = 1000000;  ;; 10^6 scaling factor for reserve rate
+const int SCALING_FACTOR = 1000000000000;  ;; 10^12 scaling factor for fixed-point precision
 
 builder store_msg_flag(builder b, int msg_flag) inline { return b.store_uint(msg_flag, 6); }
 

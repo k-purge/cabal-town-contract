@@ -11,73 +11,112 @@
 ;; storage scheme
 ;; storage#_ total_supply:Coins admin_address:MsgAddress content:^Cell jetton_wallet_code:^Cell = Storage;
 
-(int, int, slice, cell, cell, int, int, int) load_data() inline {
+(int, int, int, int, slice, cell, cell) load_data() inline {
   slice ds = get_data().begin_parse();
   return (
       ds~load_uint(64), ;; total_supply
       ds~load_uint(64),  ;; circulating_supply
+      ds~load_uint(32),  ;; reserve_rate
+      ds~load_uint(64),  ;; reserve_balance
       ds~load_msg_addr(), ;; admin_address
       ds~load_ref(), ;; content
-      ds~load_ref(),  ;; jetton_wallet_code
-      ds~load_uint(64),  ;; midpoint_supply
-      ds~load_coins(),  ;; max_price
-      ds~load_uint(8)  ;; steepness
+      ds~load_ref()  ;; jetton_wallet_code
   );
 }
 
-() save_data(int total_supply, int circulating_supply, slice admin_address, cell content, cell jetton_wallet_code, int midpoint_supply, int max_price, int steepness) impure inline {
+() save_data(int total_supply, int circulating_supply, int reserve_rate, int reserve_balance, slice admin_address, cell content, cell jetton_wallet_code) impure inline {
   set_data(begin_cell()
             .store_uint(total_supply, 64)
             .store_uint(circulating_supply, 64)
+            .store_uint(reserve_rate, 32)
+            .store_uint(reserve_balance, 64)
             .store_slice(admin_address)
             .store_ref(content)
             .store_ref(jetton_wallet_code)
-            .store_uint(midpoint_supply, 64)
-            .store_coins(max_price)
-            .store_uint(steepness, 8)
            .end_cell()
           );
 }
 
-;; Approximation of e^(-kx) using a lookup table or a series expansion
-int exp_neg(int k, int x, int x_0) {
-    int result = EXPONENTIAL_E;
+int cal_purchase_return(int reserve_token_received, int circulating_supply, int reserve_rate, int reserve_balance) impure inline {
+    ;; x = (reserve_token_received * SCALING_FACTOR) / (reserve_token_received + reserve_balance) (scale numerator first to avoid floating point)
+    int x = (reserve_token_received * SCALING_FACTOR) / (reserve_token_received + reserve_balance);
 
-    int diff = (x - x_0);
-    if (diff == 0) {
-      return result;
-    }
+    ;; r = reserve_rate (no scaling necessary, assume reserve_rate is already scaled appropriately for integer math)
+    int r = reserve_rate * SCALING_FACTOR / RATE_SCALER;
 
-    ;; TODO
-    ;; For simplicity, using a basic approximation. Refine this with a better approximation.
-    int exp = -(k * diff) / 10000;
+    ;; Initialize result with the first term of the series (scaled)
+    int result = SCALING_FACTOR;
 
-    ;; Series expansion for e^(-kx)
+    ;; Temporary variable for the current power of x (start with x^0 = SCALING_FACTOR)
+    int x_pow = SCALING_FACTOR;
+
     int i = 1;
-    while (i <= 12) {
-      i += 1;
-      result += (exp / i);
+    while (i <= 10) {
+        ;; Compute the next term in the series
+        x_pow = (x_pow * x) / SCALING_FACTOR;  ;; x^i (scaled result)
+
+        ;; Calculate the coefficient for the ith term: r * (r - SCALING_FACTOR) * ... * (r - (i - 1) * SCALING_FACTOR)
+        int coefficient = r;
+        int j = 1;
+        while (j < i) {
+            int diff = (r - j * SCALING_FACTOR);
+            if (diff > -(DECIMAL_FACTOR)) {
+                coefficient = (coefficient * diff) / SCALING_FACTOR;
+            }
+            j += 1;
+        }
+
+        ;; Add this term to the result
+        result += (coefficient * x_pow) / SCALING_FACTOR;
+
+        i += 1;
     }
 
-    if (result < 0) {
-      result = 1;
+    ;; Final result: circulating_supply * (result - SCALING_FACTOR) / SCALING_FACTOR
+    return (circulating_supply * (result - SCALING_FACTOR)) / SCALING_FACTOR;
+}
+
+int cal_sale_return(int sell_amt, int circulating_supply, int reserve_rate, int reserve_balance) impure inline {
+    ;; x = (sell_amt * SCALING_FACTOR) / circulating_supply (scaling the numerator first)
+    int x = (sell_amt * SCALING_FACTOR) / circulating_supply;
+
+    ;; r = SCALING_FACTOR / reserve_rate / RATE_SCALER (scaling up the division result)
+    int r = SCALING_FACTOR / reserve_rate / RATE_SCALER;
+
+    ;; Initialize result with the first term of the series (scaled)
+    int result = SCALING_FACTOR;
+
+    ;; Temporary variable for the current power of x (start with x^0 = SCALING_FACTOR)
+    int x_pow = SCALING_FACTOR;
+
+    ;; Initialize the sign to alternate between - and +
+    int sign = -1;
+
+    int i = 1;
+    while (i <= 10) {
+        ;; Compute the next term in the series
+        x_pow = (x_pow * x / SCALING_FACTOR);  ;; x^i (scaled result)
+
+        ;; Calculate the coefficient for the ith term: r * (r - SCALING_FACTOR) * ... * (r - (i - 1) * SCALING_FACTOR)
+        int coefficient = r;
+
+        int j = 1;
+        while (j < i) {
+            coefficient = (coefficient * (r - j * SCALING_FACTOR)) / SCALING_FACTOR;
+            j += 1;
+        }
+
+        ;; Add or subtract this term to/from the result, alternating sign
+        result += sign * (coefficient * x_pow);
+
+        ;; Alternate the sign for the next term
+        sign *= -1;
+
+        i += 1;
     }
 
-    return result;
-}
-
-;; Function to calculate the custom formula
-int sigmoid(int k, int x, int x_0, int max_price) {
-    ;; Calculate exp_result using the exp function
-    int exp_result = exp_neg(k, x, x_0);
-    return (max_price * EXPONENTIAL_E) / (EXPONENTIAL_E + exp_result);
-}
-
-int calculate_price(int amount) inline {
-  var (_, circulating_supply, _, _, _, midpoint_supply, max_price, steepness) = load_data();
-  int jettonAmt = circulating_supply + amount;
-
-  return (amount * sigmoid(steepness, jettonAmt, midpoint_supply, max_price)) / EXPONENTIAL_E; ;; calculate price based on sigmoid function
+    ;; Final result: reserve_balance * (SCALING_FACTOR - result) / SCALING_FACTOR
+    return (reserve_balance * (SCALING_FACTOR - result)) / SCALING_FACTOR;
 }
 
 () transfer_buy_tokens(slice sender_address, int jettonAmt, cell jetton_wallet_code, int value) impure {
@@ -152,12 +191,14 @@ int calculate_price(int amount) inline {
   send_ton(sender_address, tonAmt);
 }
 
-() buy_tokens(int msg_value, slice sender_address, int amount) impure {
+() buy_tokens(int msg_value, slice sender_address, int reserve_token_received) impure {
+  var (total_supply, circulating_supply, reserve_rate, reserve_balance, admin_address, content, jetton_wallet_code) = load_data();
+  
   ;; Calculate the cost using sigmoid bonding curve
-  int cost = calculate_price(amount);
+  int purchase_amt = cal_purchase_return(reserve_token_received, circulating_supply, reserve_rate, reserve_balance);
 
-  int fee = cost * NETWORK_FEE_RATE / 100;
-  int totalCost = cost + fee;
+  int fee = reserve_token_received * NETWORK_FEE_RATE / 100;
+  int totalCost = reserve_token_received + fee;
   int value = msg_value - totalCost;
 
   ;; Transfer TON from buyer to the contract
@@ -165,35 +206,33 @@ int calculate_price(int amount) inline {
   throw_unless(76, value > 0);
 
   ;; Transfer tokens from contract to buyer
-  var (total_supply, circulating_supply, admin_address, content, jetton_wallet_code, midpoint_supply, max_price, steepness) = load_data();
-
-  transfer_buy_tokens(sender_address, amount, jetton_wallet_code, value);
+  transfer_buy_tokens(sender_address, purchase_amt, jetton_wallet_code, value);
 
   ;; Increase circulating supply
-  circulating_supply += amount;
-  save_data(total_supply, circulating_supply, admin_address, content, jetton_wallet_code, midpoint_supply, max_price, steepness);
+  circulating_supply += purchase_amt;
+  reserve_balance += reserve_token_received;
+  save_data(total_supply, circulating_supply, reserve_rate, reserve_balance, admin_address, content, jetton_wallet_code);
 }
 
-() sell_tokens(int msg_value, slice sender_address, int amount) impure {
-  ;; Calculate the cost using sigmoid bonding curve
-  int cost = calculate_price(amount);
+() sell_tokens(int msg_value, slice sender_address, int sell_amt) impure {
+  var (total_supply, circulating_supply, reserve_rate, reserve_balance, admin_address, content, jetton_wallet_code) = load_data();
+  
+  ;; Calculate the sale return in ton
+  int sale_return = cal_sale_return(sell_amt, circulating_supply, reserve_rate, reserve_balance);
 
-  ;; Transfer tokens from contract to buyer
-  var (total_supply, circulating_supply, admin_address, content, jetton_wallet_code, midpoint_supply, max_price, steepness) = load_data();
-  int jettonAmt = (DECIMAL_FACTOR * amount);
-
-  int fee = cost * NETWORK_FEE_RATE / 100;
+  int fee = sale_return * NETWORK_FEE_RATE / 100;
   int value = msg_value - fee;
 
-  transfer_sell_tokens(sender_address, amount, cost, value, jetton_wallet_code);
+  transfer_sell_tokens(sender_address, sell_amt, sale_return, value, jetton_wallet_code);
 
   ;; Increase circulating supply
-  circulating_supply -= amount;
-  save_data(total_supply, circulating_supply, admin_address, content, jetton_wallet_code, midpoint_supply, max_price, steepness);
+  circulating_supply -= sell_amt;
+  reserve_balance -= sale_return;
+  save_data(total_supply, circulating_supply, reserve_rate, reserve_balance, admin_address, content, jetton_wallet_code);
 }
 
 () mint_tokens(slice to_address, cell jetton_wallet_code, int amount, cell master_msg) impure {
-  var (_, _, admin_address, _, _, _, _, _) = load_data();
+  var (_, _, _, _, admin_address, _, _) = load_data();
   ;; Check if the caller is the contract owner
   throw_unless(73, equal_slices(to_address, admin_address));
 
@@ -222,29 +261,28 @@ int calculate_price(int amount) inline {
     }
     slice sender_address = cs~load_msg_addr();
 
-    (int total_supply, int circulating_supply, slice admin_address, cell content, cell jetton_wallet_code, int midpoint_supply, int max_price, int steepness) = load_data();
+    var (total_supply, circulating_supply, reserve_rate, reserve_balance, admin_address, content, jetton_wallet_code) = load_data();
 
     int op = in_msg_body~load_uint(32);
     int query_id = in_msg_body~load_uint(64);
 
     if (op == op::update_bonding_curve_data()) {
-      int new_midpoint_supply = in_msg_body~load_uint(64);
-      int new_max_price = in_msg_body~load_coins();
-      int new_steepness = in_msg_body~load_uint(8);
-      save_data(total_supply, circulating_supply, admin_address, content, jetton_wallet_code, new_midpoint_supply, new_max_price, new_steepness);
+      int new_reserve_rate = in_msg_body~load_uint(32);
+      int new_reserve_balance = in_msg_body~load_uint(64);
+      save_data(total_supply, circulating_supply, new_reserve_rate, new_reserve_balance, admin_address, content, jetton_wallet_code);
       return ();
     }
 
     if (op == op::buy_token()) {
-        int amount = in_msg_body~load_coins();
-        buy_tokens(msg_value, sender_address, amount);
+        int reserve_token_received = in_msg_body~load_coins();
+        buy_tokens(msg_value, sender_address, reserve_token_received);
         return ();
     }
 
     ;; sell jetton to get back Ton
     if (op == op::sell_token()) {
-        int amount = in_msg_body~load_coins();
-        sell_tokens(msg_value, sender_address, amount);
+        int sell_amt = in_msg_body~load_coins();
+        sell_tokens(msg_value, sender_address, sell_amt);
         return ();
     }
 
@@ -258,7 +296,7 @@ int calculate_price(int amount) inline {
         int jetton_amount = master_msg_cs~load_coins();
 
         mint_tokens(to_address, jetton_wallet_code, amount, master_msg);
-        save_data(total_supply + jetton_amount, 0, admin_address, content, jetton_wallet_code, midpoint_supply, max_price, steepness);
+        save_data(total_supply + jetton_amount, circulating_supply + jetton_amount, reserve_rate, reserve_balance, admin_address, content, jetton_wallet_code);
         return ();
     }
 
@@ -268,7 +306,7 @@ int calculate_price(int amount) inline {
         throw_unless(74,
             equal_slices(calculate_user_jetton_wallet_address(from_address, my_address(), jetton_wallet_code), sender_address)
         );
-        save_data(total_supply - jetton_amount, 0, admin_address, content, jetton_wallet_code, midpoint_supply, max_price, steepness);
+        save_data(total_supply - jetton_amount, circulating_supply - jetton_amount, reserve_rate, reserve_balance, admin_address, content, jetton_wallet_code);
         slice response_address = in_msg_body~load_msg_addr();
         if (response_address.preload_uint(2) != 0) {
           var msg = begin_cell()
@@ -331,20 +369,22 @@ int calculate_price(int amount) inline {
     throw(0xffff);
 }
 
-(int, int, slice, cell, cell, int, int, int, int) get_jetton_data() method_id {
-    (int total_supply, int circulating_supply, slice admin_address, cell content, cell jetton_wallet_code, int midpoint_supply, int max_price, int steepness) = load_data();
-    return (total_supply, -1, admin_address, content, jetton_wallet_code, circulating_supply, midpoint_supply, max_price, steepness);
+(int, int, slice, cell, cell, int, int, int) get_jetton_data() method_id {
+    var (total_supply, circulating_supply, reserve_rate, reserve_balance, admin_address, content, jetton_wallet_code) = load_data();
+    return (total_supply, -1, admin_address, content, jetton_wallet_code, circulating_supply, reserve_rate, reserve_balance);
 }
 
 slice get_wallet_address(slice owner_address) method_id {
-    (int total_supply, int circulating_supply, slice admin_address, cell content, cell jetton_wallet_code, int midpoint_supply, int max_price, int steepness) = load_data();
+    var (total_supply, circulating_supply, reserve_rate, reserve_balance, admin_address, content, jetton_wallet_code) = load_data();
     return calculate_user_jetton_wallet_address(owner_address, my_address(), jetton_wallet_code);
 }
 
-int get_token_price(int amt) method_id {
-    return calculate_price(amt);
+int get_purchase_return(int reserve_token_received) method_id {
+  var (_, circulating_supply, reserve_rate, reserve_balance, _, _, _) = load_data();
+  return cal_purchase_return(reserve_token_received, circulating_supply, reserve_rate, reserve_balance);
 }
 
-int get_exp(int k, int x, int x_0) method_id {
-  return exp_neg(k, x, x_0);
+int get_sale_return(int sell_amt) method_id {
+  var (_, circulating_supply, reserve_rate, reserve_balance, _, _, _) = load_data();
+  return cal_sale_return(sell_amt, circulating_supply, reserve_rate, reserve_balance);
 }
