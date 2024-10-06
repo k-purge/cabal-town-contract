@@ -10,6 +10,7 @@
 
 ;; storage scheme
 ;; storage#_ total_supply:Coins admin_address:MsgAddress content:^Cell jetton_wallet_code:^Cell = Storage;
+const int initial_reserve_balance = 1000000000;
 
 (int, int, int, int, slice, cell, cell) load_data() inline {
   slice ds = get_data().begin_parse();
@@ -115,8 +116,18 @@ int cal_sale_return(int sell_amt, int circulating_supply, int reserve_rate, int 
         i += 1;
     }
 
+    int coefficientResult = reserve_balance * (SCALING_FACTOR - result);
+    
+    if (result < 0) {
+        coefficientResult = (reserve_balance - initial_reserve_balance) * SCALING_FACTOR;
+    }
+    
+    if (result > SCALING_FACTOR) {
+        coefficientResult = reserve_balance;
+    }
+
     ;; Final result: reserve_balance * (SCALING_FACTOR - result) / SCALING_FACTOR
-    return (reserve_balance * (SCALING_FACTOR - result)) / SCALING_FACTOR;
+    return coefficientResult / SCALING_FACTOR;
 }
 
 () transfer_buy_tokens(slice sender_address, int jettonAmt, cell jetton_wallet_code, int value) impure {
