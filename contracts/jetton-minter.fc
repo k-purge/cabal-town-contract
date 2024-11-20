@@ -1,6 +1,7 @@
 ;; Jetton Contract
 
 #include "imports/stdlib.fc";
+#include "imports/mathlib.fc";
 #include "imports/params.fc";
 #include "imports/op-codes.fc";
 #include "imports/error-codes.fc";
@@ -10,7 +11,6 @@
 
 ;; storage scheme
 ;; storage#_ total_supply:Coins admin_address:MsgAddress content:^Cell jetton_wallet_code:^Cell = Storage;
-const int initial_reserve_balance = 1000000000;
 
 (int, int, int, int, slice, cell, cell) load_data() inline {
   slice ds = get_data().begin_parse();
@@ -38,96 +38,63 @@ const int initial_reserve_balance = 1000000000;
           );
 }
 
+;; Formula:
+;; _supply * (((1 + _depositAmount / _reservedBalance) ^ (1 / _connectorWeight)) - 1)
 int cal_purchase_return(int reserve_token_received, int circulating_supply, int reserve_rate, int reserve_balance) impure inline {
-    ;; x = (reserve_token_received * SCALING_FACTOR) / (reserve_token_received + reserve_balance) (scale numerator first to avoid floating point)
-    int x = (reserve_token_received * SCALING_FACTOR) / (reserve_token_received + reserve_balance);
-
-    ;; r = reserve_rate (no scaling necessary, assume reserve_rate is already scaled appropriately for integer math)
-    int r = reserve_rate * SCALING_FACTOR / RATE_SCALER;
-
-    ;; Initialize result with the first term of the series (scaled)
-    int result = SCALING_FACTOR;
-
-    ;; Temporary variable for the current power of x (start with x^0 = SCALING_FACTOR)
-    int x_pow = SCALING_FACTOR;
-
-    int i = 1;
-    while (i <= 10) {
-        ;; Compute the next term in the series
-        x_pow = (x_pow * x) / SCALING_FACTOR;  ;; x^i (scaled result)
-
-        ;; Calculate the coefficient for the ith term: r * (r - SCALING_FACTOR) * ... * (r - (i - 1) * SCALING_FACTOR)
-        int coefficient = r;
-        int j = 1;
-        while (j < i) {
-            int diff = (r - j * SCALING_FACTOR);
-            if (diff > -(DECIMAL_FACTOR)) {
-                coefficient = (coefficient * diff) / SCALING_FACTOR;
-            }
-            j += 1;
-        }
-
-        ;; Add this term to the result
-        result += (coefficient * x_pow) / SCALING_FACTOR;
-
-        i += 1;
-    }
-
-    ;; Final result: circulating_supply * (result - SCALING_FACTOR) / SCALING_FACTOR
-    return (circulating_supply * (result - SCALING_FACTOR)) / SCALING_FACTOR;
+    ;; Step 1: Compute the fraction (_depositAmount / _reservedBalance)
+    int fraction = muldivr(reserve_token_received, 1 << 248, reserve_balance);
+    
+    ;; Step 2: Add 1 to the fraction
+    int base = (1 << 248) + fraction;
+    
+    ;; Step 3: Compute the natural logarithm of the base
+    int log_value = fixed248::log(base);
+    
+    ;; Step 4: Scale the logarithm by (r / _connectorWeight)
+    int scaled_log = muldivr(log_value, reserve_rate, RATE_SCALER);
+    
+    ;; Step 5: Compute the exponential of the scaled logarithm
+    int exp_value = fixed248::exp(scaled_log);
+    
+    ;; Step 6: Subtract 1 from the exponential result
+    int adjusted_exp = exp_value - (1 << 248);
+    
+    ;; Step 7: Multiply by _supply to compute the final purchase return
+    int purchase_return = muldivr(circulating_supply, adjusted_exp, 1 << 248);
+    
+    return purchase_return;
 }
 
+;; Formula:
+;; Return = _connectorBalance * (1 - (1 - _sellAmount / _supply) ^ (1 / (_connectorWeight / 1000000)))
+;; Return = _connectorBalance * (1 - exp((1000000 / _connectorWeight) * log(1 - _sellAmount / _supply)))
 int cal_sale_return(int sell_amt, int circulating_supply, int reserve_rate, int reserve_balance) impure inline {
-    ;; x = (sell_amt * SCALING_FACTOR) / circulating_supply (scaling the numerator first)
-    int x = (sell_amt * SCALING_FACTOR) / circulating_supply;
-
-    ;; r = SCALING_FACTOR / reserve_rate / RATE_SCALER (scaling up the division result)
-    int r = SCALING_FACTOR / reserve_rate / RATE_SCALER;
-
-    ;; Initialize result with the first term of the series (scaled)
-    int result = SCALING_FACTOR;
-
-    ;; Temporary variable for the current power of x (start with x^0 = SCALING_FACTOR)
-    int x_pow = SCALING_FACTOR;
-
-    ;; Initialize the sign to alternate between - and +
-    int sign = -1;
-
-    int i = 1;
-    while (i <= 10) {
-        ;; Compute the next term in the series
-        x_pow = (x_pow * x / SCALING_FACTOR);  ;; x^i (scaled result)
-
-        ;; Calculate the coefficient for the ith term: r * (r - SCALING_FACTOR) * ... * (r - (i - 1) * SCALING_FACTOR)
-        int coefficient = r;
-
-        int j = 1;
-        while (j < i) {
-            coefficient = (coefficient * (r - j * SCALING_FACTOR)) / SCALING_FACTOR;
-            j += 1;
-        }
-
-        ;; Add or subtract this term to/from the result, alternating sign
-        result += sign * (coefficient * x_pow);
-
-        ;; Alternate the sign for the next term
-        sign *= -1;
-
-        i += 1;
+    ;; Ensure circulating_supply and sell_amt are non-zero to avoid division by zero
+    if ((circulating_supply == 0) | (sell_amt == 0)) {
+        return 0;  ;; No tokens to convert or no supply, return zero
     }
 
-    int coefficientResult = reserve_balance * (SCALING_FACTOR - result);
+    int supply = circulating_supply - INITIAL_SUPPLY;
+    int reserve = reserve_balance - INITIAL_RESERVE;
+  
+    ;; Handle the edge case where _sellAmount == _supply
+    if (sell_amt == supply) {
+      return reserve;
+    }
+
+    ;; Step 1: Compute log(1 - _sellAmount / _supply)
+    int log_value = fixed248::log((1 << 248) - muldivr(sell_amt, 1 << 248, circulating_supply));
     
-    if (result < 0) {
-        coefficientResult = (reserve_balance - initial_reserve_balance) * SCALING_FACTOR;
-    }
+    ;; Step 2: Scale log_value by (1000000 / _connectorWeight)
+    int scaled_log = muldivr(log_value, RATE_SCALER, reserve_rate);
     
-    if (result > SCALING_FACTOR) {
-        coefficientResult = reserve_balance;
-    }
-
-    ;; Final result: reserve_balance * (SCALING_FACTOR - result) / SCALING_FACTOR
-    return coefficientResult / SCALING_FACTOR;
+    ;; Step 3: Compute exp(scaled_log)
+    int exp_value = fixed248::exp(scaled_log);
+    
+    ;; Step 4: Compute the final return
+    int result = muldivr(reserve_balance, (1 << 248) - exp_value, 1 << 248);
+    
+    return result;
 }
 
 () transfer_buy_tokens(slice sender_address, int jettonAmt, cell jetton_wallet_code, int value) impure {
@@ -204,9 +171,6 @@ int cal_sale_return(int sell_amt, int circulating_supply, int reserve_rate, int 
 
 () buy_tokens(int msg_value, slice sender_address, int reserve_token_received) impure {
   var (total_supply, circulating_supply, reserve_rate, reserve_balance, admin_address, content, jetton_wallet_code) = load_data();
-  
-  ;; Calculate the cost using sigmoid bonding curve
-  int purchase_amt = cal_purchase_return(reserve_token_received, circulating_supply, reserve_rate, reserve_balance);
 
   int fee = reserve_token_received * NETWORK_FEE_RATE / 100;
   int totalCost = reserve_token_received + fee;
@@ -216,25 +180,29 @@ int cal_sale_return(int sell_amt, int circulating_supply, int reserve_rate, int 
   ;; throw if not enough msg_value
   throw_unless(76, value > 0);
 
+  int new_reserve_balance = reserve_balance + reserve_token_received - fee;
+  
+  ;; Calculate the cost using sigmoid bonding curve
+  int purchase_amt = cal_purchase_return(reserve_token_received, circulating_supply, reserve_rate, new_reserve_balance);
+
   ;; Transfer tokens from contract to buyer
   transfer_buy_tokens(sender_address, purchase_amt, jetton_wallet_code, value);
 
   ;; Increase circulating supply
   circulating_supply += purchase_amt;
-  reserve_balance += reserve_token_received;
-  save_data(total_supply, circulating_supply, reserve_rate, reserve_balance, admin_address, content, jetton_wallet_code);
+  save_data(total_supply, circulating_supply, reserve_rate, new_reserve_balance, admin_address, content, jetton_wallet_code);
 }
 
 () sell_tokens(int msg_value, slice sender_address, int sell_amt) impure {
   var (total_supply, circulating_supply, reserve_rate, reserve_balance, admin_address, content, jetton_wallet_code) = load_data();
-  
+
   ;; Calculate the sale return in ton
   int sale_return = cal_sale_return(sell_amt, circulating_supply, reserve_rate, reserve_balance);
 
   int fee = sale_return * NETWORK_FEE_RATE / 100;
-  int value = msg_value - fee;
+  int ton_return = sale_return - fee;
 
-  transfer_sell_tokens(sender_address, sell_amt, sale_return, value, jetton_wallet_code);
+  transfer_sell_tokens(sender_address, sell_amt, ton_return, msg_value, jetton_wallet_code);
 
   ;; Increase circulating supply
   circulating_supply -= sell_amt;
@@ -392,10 +360,18 @@ slice get_wallet_address(slice owner_address) method_id {
 
 int get_purchase_return(int reserve_token_received) method_id {
   var (_, circulating_supply, reserve_rate, reserve_balance, _, _, _) = load_data();
-  return cal_purchase_return(reserve_token_received, circulating_supply, reserve_rate, reserve_balance);
+  int fee = reserve_token_received * NETWORK_FEE_RATE / 100;
+  int token_received_after_fee = reserve_token_received - fee;
+
+  int new_reserve_balance = token_received_after_fee + reserve_balance;
+  return cal_purchase_return(reserve_token_received, circulating_supply, reserve_rate, new_reserve_balance);
 }
 
 int get_sale_return(int sell_amt) method_id {
   var (_, circulating_supply, reserve_rate, reserve_balance, _, _, _) = load_data();
-  return cal_sale_return(sell_amt, circulating_supply, reserve_rate, reserve_balance);
+  
+  int sale_return = cal_sale_return(sell_amt, circulating_supply, reserve_rate, reserve_balance);
+
+  int fee = sale_return * NETWORK_FEE_RATE / 100;
+  return sale_return - fee;
 }
