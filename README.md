@@ -1,6 +1,6 @@
-# Purge.fun - Contract
+# Cabal.town - Contract
 
-Purge.fun is a social survival game that rewards the most loyal and purges the rest. The app combines crypto, social interaction, and gamified elements to create a fun and rewarding experience.
+Cabal.town is a social survival game that rewards the most loyals. The app combines crypto, social interaction, and gamified elements to create a fun and rewarding experience.
 
 ### How do I start?
 
@@ -9,12 +9,7 @@ Purge.fun is a social survival game that rewards the most loyal and purges the r
 ### How does the game work?
 
 **Before the game:** Purchase a token on the bonding curve to participate in the game.
-**Game ON:** When the token reaches 42K USD market cap, the game is created and all token holders will be invited to join a private group. The game consists of 10 rounds, each lasting 69 hours. At the end of each round, THE PURGE takes place.
-**Game ends**: Winner winner chicken dinner! The remain participants can claim their winner rewards.
-
-### What is THE PURGE?
-
-**After each round,** a percentage of users with the least amount of tokens will be removed from the group. The exact percentage is determined by an algorithm that depends on the number of rounds remaining, the number of game participants, and the winner size pre-determined when setting up the game.
+**Game ON:** When the token reaches 42K USD market cap, the game is created and all token holders will be invited to join a private group. The game consists of 10 rounds, each lasting 69 hours. 
 
 ### What is the buy-in amount?
 
