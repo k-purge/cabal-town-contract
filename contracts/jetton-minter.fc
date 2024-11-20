@@ -78,12 +78,12 @@ int cal_sale_return(int sell_amt, int circulating_supply, int reserve_rate, int 
     int reserve = reserve_balance - INITIAL_RESERVE;
   
     ;; Handle the edge case where _sellAmount == _supply
-    if (sell_amt == supply) {
+    if (sell_amt >= supply) {
       return reserve;
     }
 
     ;; Step 1: Compute log(1 - _sellAmount / _supply)
-    int log_value = fixed248::log((1 << 248) - muldivr(sell_amt, 1 << 248, circulating_supply));
+    int log_value = fixed248::log((1 << 248) - muldivr(sell_amt, 1 << 248, supply));
     
     ;; Step 2: Scale log_value by (1000000 / _connectorWeight)
     int scaled_log = muldivr(log_value, RATE_SCALER, reserve_rate);
@@ -92,7 +92,7 @@ int cal_sale_return(int sell_amt, int circulating_supply, int reserve_rate, int 
     int exp_value = fixed248::exp(scaled_log);
     
     ;; Step 4: Compute the final return
-    int result = muldivr(reserve_balance, (1 << 248) - exp_value, 1 << 248);
+    int result = muldivr(reserve, (1 << 248) - exp_value, 1 << 248);
     
     return result;
 }
