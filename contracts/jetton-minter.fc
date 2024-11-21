@@ -74,16 +74,13 @@ int cal_sale_return(int sell_amt, int circulating_supply, int reserve_rate, int 
         return 0;  ;; No tokens to convert or no supply, return zero
     }
 
-    int supply = circulating_supply - INITIAL_SUPPLY;
-    int reserve = reserve_balance - INITIAL_RESERVE;
-  
     ;; Handle the edge case where _sellAmount == _supply
-    if (sell_amt >= supply) {
-      return reserve;
+    if (sell_amt >= circulating_supply) {
+      return reserve_balance;
     }
 
     ;; Step 1: Compute log(1 - _sellAmount / _supply)
-    int log_value = fixed248::log((1 << 248) - muldivr(sell_amt, 1 << 248, supply));
+    int log_value = fixed248::log((1 << 248) - muldivr(sell_amt, 1 << 248, circulating_supply));
     
     ;; Step 2: Scale log_value by (1000000 / _connectorWeight)
     int scaled_log = muldivr(log_value, RATE_SCALER, reserve_rate);
@@ -92,7 +89,7 @@ int cal_sale_return(int sell_amt, int circulating_supply, int reserve_rate, int 
     int exp_value = fixed248::exp(scaled_log);
     
     ;; Step 4: Compute the final return
-    int result = muldivr(reserve, (1 << 248) - exp_value, 1 << 248);
+    int result = muldivr(reserve_balance, (1 << 248) - exp_value, 1 << 248);
     
     return result;
 }
@@ -298,37 +295,6 @@ int cal_sale_return(int sell_amt, int circulating_supply, int reserve_rate, int 
           send_raw_message(msg.end_cell(), sendmode::IGNORE_ERRORS + sendmode::CARRY_ALL_REMAINING_MESSAGE_VALUE);
         }
         return ();
-    }
-
-    ;; Withdraw tons fee to staking address
-    if (op == op::transfer_reward_balance()) {
-      throw_unless(error::unauthorized_transfer, equal_slices(admin_address, sender_address));
-      raw_reserve(wallet_min_ton_balance, 0);
-
-      slice staking_address = in_msg_body~load_msg_addr();
-
-      int rewardBalance = (my_balance - wallet_min_ton_balance) * NETWORK_FEE_RATE / 100;
-      
-      var master_msg = begin_cell()
-            .store_uint(op::jetton_pool_receive_fee(), 32)
-            .store_uint(query_id, 64) ;; quert_id
-            .store_uint(rewardBalance, 32) ;; reward
-            .store_slice(sender_address) ;; response_address
-            .store_uint(0, 1) ;; custom_payload:(Maybe ^Cell)
-            .store_coins(FORWARD_FEE) ;; forward_amount
-            .store_uint(0, 1) ;; forward_payload in this slice, not separate cell
-            .end_cell();
-
-      var msg = begin_cell()
-              .store_msg_flag(msgflag::BOUNCEABLE)
-              .store_slice(staking_address)
-              .store_coins(0)
-              .store_uint(1, 1 + 4 + 4 + 64 + 32 + 1 + 1)
-              .store_ref(master_msg);
-      send_raw_message(msg.end_cell(), sendmode::CARRY_ALL_REMAINING_MESSAGE_VALUE);
-
-      ;; send reward TON to staking
-      return send_ton(staking_address, rewardBalance);
     }
 
     ;; Withdraw tons or jettons which accidentally were sent to this jettonWallet
