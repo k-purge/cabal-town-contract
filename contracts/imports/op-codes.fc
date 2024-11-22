@@ -15,6 +15,7 @@ int op::update_bonding_curve_data() asm "41 PUSHINT";
 int op::sell_token() asm "51 PUSHINT";
 int op::deposit_token() asm "61 PUSHINT";
 int op::withdraw_token() asm "71 PUSHINT";
+int op::add_role() asm "81 PUSHINT";
 
 ;; Pool
 int op::jetton_pool_receive_fee() asm "100 PUSHINT";

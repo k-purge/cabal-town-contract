@@ -9,8 +9,8 @@
 #include "imports/jetton-utils.fc";
 ;; Jettons minter smart contract
 
-;; storage scheme
-;; storage#_ total_supply:Coins admin_address:MsgAddress content:^Cell jetton_wallet_code:^Cell = Storage;
+;; Persistent storage for roles (map of address -> role bitmask)
+global cell roles;
 
 (int, int, int, int, slice, cell, cell) load_data() inline {
   slice ds = get_data().begin_parse();
@@ -36,6 +36,27 @@
             .store_ref(jetton_wallet_code)
            .end_cell()
           );
+}
+
+;; Check if an address has a specific role
+int has_role(slice address, slice role) inline {
+    (int wc, int addr_hash) = parse_std_addr(address);
+    throw_unless(error::pool_workchain_unmatched, wc == 0);  ;; error if the workchain is incorrect
+
+    (slice selected_role, int found?) = roles.udict_get?(ADDR_SIZE, addr_hash);
+
+    return (found? & equal_slices(role, selected_role)) != 0;
+}
+
+;; Add a role to an address (only ADMIN can do this)
+() add_role(slice sender_address, slice target_address, slice role) impure {
+    var (_, _, _, _, admin_address, _, _) = load_data();
+    throw_unless(error::unauthorized_request, equal_slices(sender_address, admin_address)); ;; Only ADMIN can assign roles
+    
+    (int wc, int addr_hash) = parse_std_addr(target_address);
+    throw_unless(error::pool_workchain_unmatched, wc == 0);  ;; error if the workchain is incorrect
+    
+    roles~udict_set(ADDR_SIZE, addr_hash, role);
 }
 
 ;; Formula:
@@ -225,50 +246,74 @@ int cal_sale_return(int sell_amt, int circulating_supply, int reserve_rate, int 
 }
 
 () recv_internal(int my_balance, int msg_value, cell in_msg_full, slice in_msg_body) impure {
-    if (in_msg_body.slice_empty?()) { ;; ignore empty messages
+    ;; ignore empty messages
+    if (in_msg_body.slice_empty?()) {
         return ();
     }
     
+    ;; Parse the incoming message
     slice cs = in_msg_full.begin_parse();
     int flags = cs~load_uint(4);
 
-    if (flags & 1) { ;; ignore all bounced messages
+    ;; Ignore bounced messages
+    if (flags & 1) {
         return ();
     }
+
     slice sender_address = cs~load_msg_addr();
 
+    ;; Load contract data
     var (total_supply, circulating_supply, reserve_rate, reserve_balance, admin_address, content, jetton_wallet_code) = load_data();
 
+    ;; Parse operation and query ID
     int op = in_msg_body~load_uint(32);
     int query_id = in_msg_body~load_uint(64);
 
-    if (op == op::update_bonding_curve_data()) {
-      int new_reserve_rate = in_msg_body~load_uint(32);
-      int new_reserve_balance = in_msg_body~load_uint(64);
-      save_data(total_supply, circulating_supply, new_reserve_rate, new_reserve_balance, admin_address, content, jetton_wallet_code);
-      return ();
-    }
-
+    ;; Buy tokens
     if (op == op::buy_token()) {
         int reserve_token_received = in_msg_body~load_coins();
         buy_tokens(msg_value, sender_address, reserve_token_received);
         return ();
     }
 
-    ;; sell jetton to get back Ton
+    ;; Sell tokens
     if (op == op::sell_token()) {
         int sell_amt = in_msg_body~load_coins();
         sell_tokens(msg_value, sender_address, sell_amt);
         return ();
     }
 
+    ;; Add role
+    if (op == op::add_role()) {
+        slice target_address = cs~load_msg_addr();
+        cell role = in_msg_body~load_ref();
+        slice role_slice = role.begin_parse();
+
+        add_role(sender_address, target_address, role_slice);
+        return ();
+    }
+
+    ;; Update bonding curve parameters
+    ;; Required only operator can update
+    if (op == op::update_bonding_curve_data()) {
+      throw_unless(error::unauthorized_update_request, has_role(sender_address, ROLE_OPERATOR)); ;; Only OPERATOR can update bonding curve
+      int new_reserve_rate = in_msg_body~load_uint(32);
+      int new_reserve_balance = in_msg_body~load_uint(64);
+      save_data(total_supply, circulating_supply, new_reserve_rate, new_reserve_balance, admin_address, content, jetton_wallet_code);
+      return ();
+    }
+
+    ;; Mint new tokens 
+    ;; Required only minter can mint
     if (op == op::mint()) {
-        throw_unless(73, equal_slices(sender_address, admin_address));
+        throw_unless(error::unauthorized_mint_request, has_role(sender_address, ROLE_MINTER)); ;; Only MINTER can mint
         slice to_address = in_msg_body~load_msg_addr();
         int amount = in_msg_body~load_coins();
         cell master_msg = in_msg_body~load_ref();
+        
+        ;; Parse the master message
         slice master_msg_cs = master_msg.begin_parse();
-        master_msg_cs~skip_bits(32 + 64); ;; op + query_id
+        master_msg_cs~skip_bits(32 + 64); ;; Skip op and query_id
         int jetton_amount = master_msg_cs~load_coins();
 
         mint_tokens(to_address, jetton_wallet_code, amount, master_msg);
@@ -276,6 +321,7 @@ int cal_sale_return(int sell_amt, int circulating_supply, int reserve_rate, int 
         return ();
     }
 
+    ;; Handle burn notifications
     if (op == op::burn_notification()) {
         int jetton_amount = in_msg_body~load_coins();
         slice from_address = in_msg_body~load_msg_addr();
@@ -283,6 +329,8 @@ int cal_sale_return(int sell_amt, int circulating_supply, int reserve_rate, int 
             equal_slices(calculate_user_jetton_wallet_address(from_address, my_address(), jetton_wallet_code), sender_address)
         );
         save_data(total_supply - jetton_amount, circulating_supply - jetton_amount, reserve_rate, reserve_balance, admin_address, content, jetton_wallet_code);
+        
+        ;; Handle excess return if applicable
         slice response_address = in_msg_body~load_msg_addr();
         if (response_address.preload_uint(2) != 0) {
           var msg = begin_cell()
@@ -298,9 +346,11 @@ int cal_sale_return(int sell_amt, int circulating_supply, int reserve_rate, int 
     }
 
     ;; Withdraw tons or jettons which accidentally were sent to this jettonWallet
+    ;; admin-only operation
     if (op == op::withdraw_tons()) {
-      throw_unless(error::unauthorized_transfer, equal_slices(admin_address, sender_address));
+      throw_unless(error::unauthorized_transfer, has_role(sender_address, ROLE_ADMIN)); ;; Only ADMIN can withdraw
       raw_reserve(wallet_min_ton_balance, 0);
+      
       var msg = begin_cell()
               .store_msg_flag(msgflag::BOUNCEABLE)
               .store_slice(admin_address)
@@ -311,6 +361,7 @@ int cal_sale_return(int sell_amt, int circulating_supply, int reserve_rate, int 
       return send_raw_message(msg.end_cell(), sendmode::CARRY_ALL_BALANCE | sendmode::IGNORE_ERRORS);
     }
 
+    ;; If no valid operation is found, throw an error
     throw(0xffff);
 }
 
