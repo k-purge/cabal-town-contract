@@ -1,68 +1,181 @@
+# Cabal.town - Contract
+
+Cabal.town is a social survival game that rewards the most loyals. The app combines crypto, social interaction, and gamified elements to create a fun and rewarding experience.
+
+### How do I start?
+
+**You can start** by buying a token on the bonding curve to participate in the game. Upon purchasing the buy-in amount, you will be invited to join a private group.
+
+### How does the game work?
+
+**Before the game:** Purchase a token on the bonding curve to participate in the game.
+**Game ON:** When the token reaches 42K USD market cap, the game is created and all token holders will be invited to join a private group. The game consists of 10 rounds, each lasting 69 hours. 
+
+### What is the buy-in amount?
+
+**Buy-in amount** refers to the minimum amount for you to enter the game. For games that haven't started yet, the buy-in will be 1 token. Whereas for games that have started, the buy-in will equal the least amount of tokens the in-game participants have.
+
+### What is the reward for the final winners?
+
+**On top of** being part of a close community, you will also earn 25% of the fees generated via trading the token.
+
+### What happens at the end of the game?
+
+**At the end of the game,** the number of participants in the private group stabilizes. However, when new participants join the group, the person with the least amount of tokens will still be removed.
+
+## 🌼 Install 🌼
+
+Required: 
+* [Git](https://git-scm.com/downloads)
+* [Node](https://nodejs.org/en/download/) (Use Version 18 LTS)
+* [Yarn](https://classic.yarnpkg.com/en/docs/install/#mac-stable)
+
+(⚠️ Don't install the linux package `yarn` make sure you install yarn with `npm i -g yarn` or even `sudo npm i -g yarn`!)
+
+```sh
+git clone https://github.com/
+```
+```sh
+cd 
+yarn install
+```
 ---
-icon: hand-wave
-cover: >-
-  https://s3-alpha-sig.figma.com/img/19b3/df9d/145535ed2d2eac7fc67b9d0217c45163?Expires=1733702400&Key-Pair-Id=APKAQ4GOSFWCVNEHN3O4&Signature=SMBNdPNO-l4mVISmwfrNLRy7fd9e7Gp396J2l5GV4EZvQINJBx4zGvMFC0vMvuhBtX7MLWc8MgofhaX4KfLjwfveklsE6bkFw~zvz2ely4u28vq6MUz3gqXcei2ALJgIXOjmPUzwtdWC01qY6KeMoDTHJ74cu8bVBaYSRdXkORhWjs8it64xLpSnFPLB32OekqOCRg4lQRSBbtGBzboimEQli~xZwOXS-j4QU0j-jLtB8oGn3B5Zc3V2hVl5fZvD-QQosBOYNKzctW8-OjGc9BkUy9zHwleO9lAhUkMl9HKjVs8WPVaKeMmmQlWt~OTziEVoe9PL6IQ4IOzRI1g3EA__
-coverY: 0
-layout:
-  cover:
-    visible: true
-    size: full
-  title:
-    visible: true
-  description:
-    visible: false
-  tableOfContents:
-    visible: true
-  outline:
-    visible: true
-  pagination:
-    visible: true
+
+## 💎 Jetton Standard 💎
+
+A token is a unit of account for some digital asset in some network.
+
+Fungible tokens are assets that are not unique and can be easily exchanged for another asset of the same type. Such tokens are made in such a way that each token is equivalent to the next token.
+
+To enable tokens to be used in other applications (from wallets to decentralized exchanges), smart contract interface standards for tokens are being introduced.
+
+The standard for a fungible token in the TON is the [Jetton](https://github.com/ton-blockchain/TEPs/blob/master/text/0074-jettons-standard.md).
+
+Unlike ethereum, there is no single smart contract that stores token balances for network wallets. In the standard Token:
+- master contract stores general information about the token
+- for each owner of the token, a separate smart contract is created - a wallet contract, which allows you to transfer the token and store the balance
+
+---
+ 
+## 📑 Get Jetton Master Contract Data 📂 
+
+As in the NFT standard from the first quest, Jetton contracts have mandatory GET methods. For the master contract, one of those methods is `get_jetton_data()` which returns data about the Jetton, let's try:
+
+```sh
+yarn bolt
+```
+
+You will get something like this:
+![image](https://user-images.githubusercontent.com/18370291/254961827-c907b673-7331-4946-b931-78f220fee498.png)
+
+That means:
+`total_supply` - the total number of issues jettons
+`mintable` - (-1/0) - flag which indicates whether number of jettons can increase 
+`admin_address`- address of smart-contract which control Jetton 
+`jetton_content` - cell - data in accordance to [Token Data Standard #64](https://github.com/ton-blockchain/TEPs/blob/master/text/0064-token-data-standard.md)
+
+Well, now let's release our Jetton!
+
 ---
 
-# Welcome
+## 🏭 ICO variation 🏭
 
-Welcome to the official documentation for Cabal.town! This GitBook serves as the foundation for understanding our innovative platform and its components.\
+ICO - Initial Coin Offering - issuance by a project or company of its own money - tokens (cryptocurrency) in order to attract investment.
+
+The simplest smart contract for Initial Coin Offering is a slightly modified Jetton standard master contract, which, when sending cryptocurrencies to it, gives tokens in exchange.
+
+---
+
+## 🔌 Compile🔌  
+
+As in the previous quest, in order to use a smart contract, it must be compiled into a hexBoC format. First, we will compile the master contract, and then the wallet, the wallet will be needed to deploy the master contract:
+
+```sh
+yarn compilemaster
+```
+
+```sh
+yarn compilewallet
+```
+---
+
+##  📻 Deploy 📡
+
+Go to the deploy.ts file, in the line 62, change the const `ownerAddress` to your own, it will be stored in register c4, and only from this address it will be possible to execute commands assigned to administer the token.
+
+![image](https://user-images.githubusercontent.com/18370291/254968050-0130250e-5bda-4e20-9643-0fc9b39f9223.png)
+
+line 63 is for token metadata, you can put some link here, as this is an example, you can just write the phrase that you want to store in the master contract instead of metadata
+
+We launch the deployment script and scan the QR code, then you already know))
+
+```sh
+yarn deploy
+```
+
+Be sure to save the link below the quar code, it contains the address of the master contract of your Jetton.
+
+---
+
+## 💾  Get your Master Contract Data 💾
+
+We go into the file and change the address at the top of the file on the line to the address of your master contract.
+
+![image](https://user-images.githubusercontent.com/18370291/254981215-01803c51-6831-4f07-87d1-25fc97fd2436.png)
+
+Launch!
+
+```sh
+yarn getjetton
+```
+
+If everything worked out, it's time to participate in ICO
+
+---
+
+##  📀 Participate in ICO 📀
+
+To participate in the ISO, you just need to send a message to the smart contract, let's do this:
+
+```sh
+yarn send
+```
+
+What to do with the QR code you already know :) 
+The question arises how to get the balance of our Jetton wallet.
+
+---
+
+##  🎰 Getting to the wallet 🎰
+
+Using the master contract, we will receive a wallet token of our address. Get method `get_wallet_address()`:
 
 
-Our project is designed with a modular architecture to provide a seamless and integrated experience across various technologies. It comprises four key components:
+```sh
+yarn myjettonwallet
+```
 
-1. **Smart Contract**
+Copy the address, we will use it in the `jettonwalletinfo.ts` script:
 
-• Secure and trustless interactions powered by TON network.
+![image](https://user-images.githubusercontent.com/18370291/254984237-0a17e470-bacc-435d-8c3b-4b589967d263.png)
 
-• This GitBook focuses on this component, detailing its structure, functionality, and deployment process.
+In the 12th line you need to insert the address of your wallet token, and of course run the script:
 
-2. **Client Application**
+```sh
+yarn jettonbalance
+```
 
-• A user-facing interface offering a smooth and intuitive experience.
+![image](https://user-images.githubusercontent.com/18370291/254985023-b11448a4-e35f-4056-a3dd-8d0e3c742a6f.png)
 
-_(Currently under development)_
+Enjoy the balance)
 
-3. **Server Backend**
+---
 
-• The backbone of the platform, managing data, business logic, and API integrations.
+✍️ Unit Test 🦾
+Run the unit test on smart contract to verify the FunC Jetton methods.
+```sh
+yarn test
+```
+If all test cases completed, will get all PASS as follows:
 
-_(Currently under development)_
-
-4. **Telegram Bot**
-
-• A lightweight and interactive way to access our platform through Telegram.
-
-_(Currently under development)_\
-
-
-We are actively working on delivering the remaining components and will update this documentation as new features are completed. For now, delve into our Smart Contract section to explore the core of our Jetton with bonding curve solution.
-
-
-
-Thank you for joining us on this journey. Stay tuned for more updates, and feel free to reach out if you have any questions or feedback!\
-
-
-Happy building!
-
-
-
-### Jump right in
-
-<table data-view="cards"><thead><tr><th></th><th></th><th data-hidden data-card-cover data-type="files"></th><th data-hidden></th><th data-hidden data-card-target data-type="content-ref"></th></tr></thead><tbody><tr><td><strong>Getting Started</strong></td><td>To get started</td><td></td><td></td><td><a href="broken-reference">Broken link</a></td></tr><tr><td><strong>Jetton Smart Contract</strong></td><td>Ton Network Jetton Smart Contract</td><td></td><td></td><td><a href="getting-started/quickstart.md">quickstart.md</a></td></tr></tbody></table>
-
+![image](https://files.gitbook.com/v0/b/gitbook-x-prod.appspot.com/o/spaces%2Fckkz3bwFBuF75OzHb6dV%2Fuploads%2FUknYsKGieiREgDgR23nf%2FScreenshot%202024-11-27%20at%209.43.49%E2%80%AFAM.png?alt=media&token=9579d3b2-e149-4b73-831b-f53b1ef7f4bb)
