@@ -9,10 +9,7 @@
 #include "imports/jetton-utils.fc";
 ;; Jettons minter smart contract
 
-;; Persistent storage for roles (map of address -> role bitmask)
-global cell roles;
-
-(int, int, int, int, slice, cell, cell) load_data() inline {
+(int, int, int, int, slice, cell, cell, cell) load_data() inline {
   slice ds = get_data().begin_parse();
   return (
       ds~load_uint(128), ;; total_supply
@@ -21,11 +18,12 @@ global cell roles;
       ds~load_uint(64),  ;; reserve_balance
       ds~load_msg_addr(), ;; admin_address
       ds~load_ref(), ;; content
-      ds~load_ref()  ;; jetton_wallet_code
+      ds~load_ref(),  ;; jetton_wallet_code
+      ds~load_dict() ;; Dictionary to store user roles
   );
 }
 
-() save_data(int total_supply, int circulating_supply, int reserve_rate, int reserve_balance, slice admin_address, cell content, cell jetton_wallet_code) impure inline {
+() save_data(int total_supply, int circulating_supply, int reserve_rate, int reserve_balance, slice admin_address, cell content, cell jetton_wallet_code, cell roles) impure inline {
   set_data(begin_cell()
             .store_uint(total_supply, 128)
             .store_uint(circulating_supply, 128)
@@ -34,29 +32,63 @@ global cell roles;
             .store_slice(admin_address)
             .store_ref(content)
             .store_ref(jetton_wallet_code)
+            .store_dict(roles)
            .end_cell()
           );
 }
 
 ;; Check if an address has a specific role
-int has_role(slice address, slice role) inline {
+int has_role(slice address, int role) inline {
+    var (_, _, _, _, _, _, _, roles) = load_data();
+    
+    if (roles.cell_null?()) {
+     return 0; ;; Role not found
+    }
+    
+    ;;  Parse the standard address into workchain and address hash
     (int wc, int addr_hash) = parse_std_addr(address);
-    throw_unless(error::pool_workchain_unmatched, wc == 0);  ;; error if the workchain is incorrect
 
-    (slice selected_role, int found?) = roles.udict_get?(ADDR_SIZE, addr_hash);
+    ;; Ensure the workchain is the expected one (e.g., 0)
+    throw_unless(error::pool_workchain_unmatched, wc == 0);
 
-    return (found? & equal_slices(role, selected_role)) != 0;
+    ;; Attempt to retrieve the role from the dictionary
+    (slice selected_role_slice, int found?) = roles.udict_get?(ADDR_SIZE, addr_hash);
+
+    ;; Check if the role was found in the dictionary
+    if (found?) {
+      ;; Safely load the role value from the slice
+      int selected_role = selected_role_slice~load_uint(8);
+
+      ;; Return whether the role matches
+      return (role == selected_role);
+    }
+
+     return 0; ;; Role not found
 }
 
 ;; Add a role to an address (only ADMIN can do this)
-() add_role(slice sender_address, slice target_address, slice role) impure {
-    var (_, _, _, _, admin_address, _, _) = load_data();
-    throw_unless(error::unauthorized_request, equal_slices(sender_address, admin_address)); ;; Only ADMIN can assign roles
-    
+() add_role(slice sender_address, slice target_address, int role) impure {
+    ;; Load data and extract the ADMIN address
+    var (total_supply, circulating_supply, reserve_rate, reserve_balance, admin_address, content, jetton_wallet_code, roles) = load_data();
+
+    ;; Ensure only ADMIN can assign roles
+    throw_unless(error::unauthorized_request, equal_slices(sender_address, admin_address));
+
+    ;; Parse the target address
     (int wc, int addr_hash) = parse_std_addr(target_address);
-    throw_unless(error::pool_workchain_unmatched, wc == 0);  ;; error if the workchain is incorrect
-    
-    roles~udict_set(ADDR_SIZE, addr_hash, role);
+
+    ;; Ensure the workchain ID is valid (e.g., 0)
+    throw_unless(error::pool_workchain_unmatched, wc == 0);
+
+    slice role_slice = begin_cell()
+            .store_uint(role, 8) ;; role
+            .end_cell()
+            .begin_parse();
+
+    ;; Set the role in the dictionary
+    roles~udict_set(ADDR_SIZE, addr_hash, role_slice);
+
+    save_data(total_supply, circulating_supply, reserve_rate, reserve_balance, admin_address, content, jetton_wallet_code, roles);
 }
 
 ;; Formula:
@@ -87,8 +119,8 @@ int cal_purchase_return(int reserve_token_received, int circulating_supply, int 
 }
 
 ;; Formula:
-;; Return = _connectorBalance * (1 - (1 - _sellAmount / _supply) ^ (1 / (_connectorWeight / 1000000)))
-;; Return = _connectorBalance * (1 - exp((1000000 / _connectorWeight) * log(1 - _sellAmount / _supply)))
+;; Return = _connectorBalance * (1 - (1 - _sellAmount / _supply) ^ (1 / (_connectorWeight / 10000)))
+;; Return = _connectorBalance * (1 - exp((10000 / _connectorWeight) * log(1 - _sellAmount / _supply)))
 int cal_sale_return(int sell_amt, int circulating_supply, int reserve_rate, int reserve_balance) impure inline {
     ;; Ensure circulating_supply and sell_amt are non-zero to avoid division by zero
     if ((circulating_supply == 0) | (sell_amt == 0)) {
@@ -128,12 +160,12 @@ int cal_sale_return(int sell_amt, int circulating_supply, int reserve_rate, int 
             .store_coins(jettonAmt)
             .store_slice(to_wallet_address) ;; from_address
             .store_slice(to_wallet_address) ;; response_address
-            .store_coins(10000000) ;; forward_amount
+            .store_coins(FORWARD_FEE) ;; forward_amount
             .store_uint(0, 1) ;; forward_payload in this slice, not separate cell
             .end_cell();
 
   var msg = begin_cell()
-    .store_uint(0x18, 6)
+    .store_uint(msgflag::BOUNCEABLE, 6)
     .store_slice(jetton_wallet_address)
     .store_coins(value) ;; for transferToJWallet
     .store_uint(4 + 2 + 1, 1 + 4 + 4 + 64 + 32 + 1 + 1 + 1)
@@ -147,7 +179,7 @@ int cal_sale_return(int sell_amt, int circulating_supply, int reserve_rate, int 
   ;; SEND jettons
   if (to_address.preload_uint(2) != 0) {
     var msg = begin_cell()
-      .store_uint(0x18, 6) ;; nobounce - int_msg_info$0 ihr_disabled:Bool bounce:Bool bounced:Bool src:MsgAddress -> 011000
+      .store_uint(msgflag::BOUNCEABLE, 6) ;; nobounce - int_msg_info$0 ihr_disabled:Bool bounce:Bool bounced:Bool src:MsgAddress -> 011000
       .store_slice(to_address)
       .store_coins(tonAmt)
       .store_uint(0, 1 + 4 + 4 + 64 + 32 + 1 + 1);
@@ -157,11 +189,11 @@ int cal_sale_return(int sell_amt, int circulating_supply, int reserve_rate, int 
   return ();
 }
 
-() transfer_sell_tokens(slice sender_address, int jettonAmt, int tonAmt, int value, cell jetton_wallet_code) impure {
+() transfer_sell_tokens(slice sender_address, int jettonAmt, int tonAmt, cell jetton_wallet_code) impure {
   ;; SELL jettons
   cell state_init = calculate_jetton_wallet_state_init(sender_address, my_address(), jetton_wallet_code);
   slice jetton_wallet = calculate_jetton_wallet_address(state_init);
-  
+
   var master_msg = begin_cell()
             .store_uint(op::sell_token(), 32)
             .store_uint(0, 64) ;; quert_id
@@ -169,14 +201,14 @@ int cal_sale_return(int sell_amt, int circulating_supply, int reserve_rate, int 
             .store_slice(my_address())
             .store_slice(sender_address) ;; response_address
             .store_uint(0, 1) ;; custom_payload:(Maybe ^Cell)
-            .store_coins(10000000) ;; forward_amount
+            .store_coins(FORWARD_FEE) ;; forward_amount
             .store_uint(0, 1) ;; forward_payload in this slice, not separate cell
             .end_cell();
 
   var msg = begin_cell()
-    .store_uint(0x10, 6) ;; NON_BOUNCEABLE
+    .store_uint(msgflag::NON_BOUNCEABLE, 6) ;; NON_BOUNCEABLE
     .store_slice(jetton_wallet) ;; jetton seller
-    .store_coins(value) ;; for transferToJWallet
+    .store_coins(FORWARD_FEE) ;; for transferToJWallet
     .store_uint(4 + 2 + 1, 1 + 4 + 4 + 64 + 32 + 1 + 1 + 1)
     .store_ref(state_init)
     .store_ref(master_msg);
@@ -188,11 +220,11 @@ int cal_sale_return(int sell_amt, int circulating_supply, int reserve_rate, int 
 }
 
 () buy_tokens(int msg_value, slice sender_address, int reserve_token_received) impure {
-  var (total_supply, circulating_supply, reserve_rate, reserve_balance, admin_address, content, jetton_wallet_code) = load_data();
+  var (total_supply, circulating_supply, reserve_rate, reserve_balance, admin_address, content, jetton_wallet_code, roles) = load_data();
 
   ;; Transfer TON from buyer to the contract
   ;; throw if not enough msg_value
-  throw_unless(76, msg_value > 0);
+  throw_unless(error::not_enough_tons, msg_value > 0);
 
   int new_reserve_balance = reserve_balance + reserve_token_received;
   
@@ -204,32 +236,30 @@ int cal_sale_return(int sell_amt, int circulating_supply, int reserve_rate, int 
 
   ;; Increase circulating supply
   circulating_supply += purchase_amt;
-  save_data(total_supply, circulating_supply, reserve_rate, new_reserve_balance, admin_address, content, jetton_wallet_code);
+  save_data(total_supply, circulating_supply, reserve_rate, new_reserve_balance, admin_address, content, jetton_wallet_code, roles);
 }
 
-() sell_tokens(int msg_value, slice sender_address, int sell_amt) impure {
-  var (total_supply, circulating_supply, reserve_rate, reserve_balance, admin_address, content, jetton_wallet_code) = load_data();
+() sell_tokens(slice sender_address, int sell_amt) impure {
+  var (total_supply, circulating_supply, reserve_rate, reserve_balance, admin_address, content, jetton_wallet_code, roles) = load_data();
 
   ;; Calculate the sale return in ton
   int sale_return = cal_sale_return(sell_amt, circulating_supply, reserve_rate, reserve_balance);
 
-  transfer_sell_tokens(sender_address, sell_amt, sale_return, msg_value, jetton_wallet_code);
+  transfer_sell_tokens(sender_address, sell_amt, sale_return, jetton_wallet_code);
 
   ;; Increase circulating supply
   circulating_supply -= sell_amt;
   reserve_balance -= sale_return;
-  save_data(total_supply, circulating_supply, reserve_rate, reserve_balance, admin_address, content, jetton_wallet_code);
+  save_data(total_supply, circulating_supply, reserve_rate, reserve_balance, admin_address, content, jetton_wallet_code, roles);
 }
 
 () mint_tokens(slice to_address, cell jetton_wallet_code, int amount, cell master_msg) impure {
-  var (_, _, _, _, admin_address, _, _) = load_data();
-  ;; Check if the caller is the contract owner
-  throw_unless(73, equal_slices(to_address, admin_address));
+  var (_, _, _, _, admin_address, _, _, _) = load_data();
 
   cell state_init = calculate_jetton_wallet_state_init(to_address, my_address(), jetton_wallet_code);
   slice to_wallet_address = calculate_jetton_wallet_address(state_init);
   var msg = begin_cell()
-    .store_uint(0x18, 6)
+    .store_uint(msgflag::BOUNCEABLE, 6)
     .store_slice(to_wallet_address)
     .store_coins(amount)
     .store_uint(4 + 2 + 1, 1 + 4 + 4 + 64 + 32 + 1 + 1 + 1)
@@ -256,7 +286,7 @@ int cal_sale_return(int sell_amt, int circulating_supply, int reserve_rate, int 
     slice sender_address = cs~load_msg_addr();
 
     ;; Load contract data
-    var (total_supply, circulating_supply, reserve_rate, reserve_balance, admin_address, content, jetton_wallet_code) = load_data();
+    var (total_supply, circulating_supply, reserve_rate, reserve_balance, admin_address, content, jetton_wallet_code, roles) = load_data();
 
     ;; Parse operation and query ID
     int op = in_msg_body~load_uint(32);
@@ -272,17 +302,18 @@ int cal_sale_return(int sell_amt, int circulating_supply, int reserve_rate, int 
     ;; Sell tokens
     if (op == op::sell_token()) {
         int sell_amt = in_msg_body~load_coins();
-        sell_tokens(msg_value, sender_address, sell_amt);
+        sell_tokens(sender_address, sell_amt);
         return ();
     }
 
     ;; Add role
     if (op == op::add_role()) {
-        slice target_address = cs~load_msg_addr();
-        cell role = in_msg_body~load_ref();
-        slice role_slice = role.begin_parse();
+        slice target_address = in_msg_body~load_msg_addr();
+        cell role_ref = in_msg_body~load_ref();
+        slice role_slice = role_ref.begin_parse();
+        int role = role_slice~load_uint(8);
 
-        add_role(sender_address, target_address, role_slice);
+        add_role(sender_address, target_address, role);
         return ();
     }
 
@@ -292,7 +323,7 @@ int cal_sale_return(int sell_amt, int circulating_supply, int reserve_rate, int 
       throw_unless(error::unauthorized_update_request, has_role(sender_address, ROLE_OPERATOR)); ;; Only OPERATOR can update bonding curve
       int new_reserve_rate = in_msg_body~load_uint(32);
       int new_reserve_balance = in_msg_body~load_uint(64);
-      save_data(total_supply, circulating_supply, new_reserve_rate, new_reserve_balance, admin_address, content, jetton_wallet_code);
+      save_data(total_supply, circulating_supply, new_reserve_rate, new_reserve_balance, admin_address, content, jetton_wallet_code, roles);
       return ();
     }
 
@@ -310,7 +341,7 @@ int cal_sale_return(int sell_amt, int circulating_supply, int reserve_rate, int 
         int jetton_amount = master_msg_cs~load_coins();
 
         mint_tokens(to_address, jetton_wallet_code, amount, master_msg);
-        save_data(total_supply + jetton_amount, circulating_supply + jetton_amount, reserve_rate, reserve_balance, admin_address, content, jetton_wallet_code);
+        save_data(total_supply + jetton_amount, circulating_supply + jetton_amount, reserve_rate, reserve_balance, admin_address, content, jetton_wallet_code, roles);
         return ();
     }
 
@@ -318,16 +349,16 @@ int cal_sale_return(int sell_amt, int circulating_supply, int reserve_rate, int 
     if (op == op::burn_notification()) {
         int jetton_amount = in_msg_body~load_coins();
         slice from_address = in_msg_body~load_msg_addr();
-        throw_unless(74,
+        throw_unless(error::unauthorized_burn_notification,
             equal_slices(calculate_user_jetton_wallet_address(from_address, my_address(), jetton_wallet_code), sender_address)
         );
-        save_data(total_supply - jetton_amount, circulating_supply - jetton_amount, reserve_rate, reserve_balance, admin_address, content, jetton_wallet_code);
+        save_data(total_supply - jetton_amount, circulating_supply - jetton_amount, reserve_rate, reserve_balance, admin_address, content, jetton_wallet_code, roles);
         
         ;; Handle excess return if applicable
         slice response_address = in_msg_body~load_msg_addr();
         if (response_address.preload_uint(2) != 0) {
           var msg = begin_cell()
-            .store_uint(0x10, 6) ;; nobounce - int_msg_info$0 ihr_disabled:Bool bounce:Bool bounced:Bool src:MsgAddress -> 011000
+            .store_uint(msgflag::NON_BOUNCEABLE, 6) ;; nobounce - int_msg_info$0 ihr_disabled:Bool bounce:Bool bounced:Bool src:MsgAddress -> 011000
             .store_slice(response_address)
             .store_coins(0)
             .store_uint(0, 1 + 4 + 4 + 64 + 32 + 1 + 1)
@@ -343,29 +374,26 @@ int cal_sale_return(int sell_amt, int circulating_supply, int reserve_rate, int 
 }
 
 (int, int, slice, cell, cell, int, int, int) get_jetton_data() method_id {
-    var (total_supply, circulating_supply, reserve_rate, reserve_balance, admin_address, content, jetton_wallet_code) = load_data();
+    var (total_supply, circulating_supply, reserve_rate, reserve_balance, admin_address, content, jetton_wallet_code, roles) = load_data();
     return (total_supply, -1, admin_address, content, jetton_wallet_code, circulating_supply, reserve_rate, reserve_balance);
 }
 
 slice get_wallet_address(slice owner_address) method_id {
-    var (total_supply, circulating_supply, reserve_rate, reserve_balance, admin_address, content, jetton_wallet_code) = load_data();
+    var (total_supply, circulating_supply, reserve_rate, reserve_balance, admin_address, content, jetton_wallet_code, roles) = load_data();
     return calculate_user_jetton_wallet_address(owner_address, my_address(), jetton_wallet_code);
 }
 
 int get_purchase_return(int reserve_token_received) method_id {
-  var (_, circulating_supply, reserve_rate, reserve_balance, _, _, _) = load_data();
-  int fee = reserve_token_received * NETWORK_FEE_RATE / 100;
-  int token_received_after_fee = reserve_token_received - fee;
-
-  int new_reserve_balance = token_received_after_fee + reserve_balance;
+  var (_, circulating_supply, reserve_rate, reserve_balance, _, _, _, _) = load_data();
+  int new_reserve_balance = reserve_token_received + reserve_balance;
   return cal_purchase_return(reserve_token_received, circulating_supply, reserve_rate, new_reserve_balance);
 }
 
 int get_sale_return(int sell_amt) method_id {
-  var (_, circulating_supply, reserve_rate, reserve_balance, _, _, _) = load_data();
-  
-  int sale_return = cal_sale_return(sell_amt, circulating_supply, reserve_rate, reserve_balance);
+  var (_, circulating_supply, reserve_rate, reserve_balance, _, _, _, _) = load_data();
+  return cal_sale_return(sell_amt, circulating_supply, reserve_rate, reserve_balance);
+}
 
-  int fee = sale_return * NETWORK_FEE_RATE / 100;
-  return sale_return - fee;
+int get_has_role(slice address, int role) method_id {
+  return has_role(address, role);
 }

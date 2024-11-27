@@ -24,9 +24,9 @@ const int INITIAL_SUPPLY = 10000000000000;
 const int INITIAL_RESERVE = 1000000000;
 
 ;; Define role constants
-const slice ROLE_ADMIN = "ADMIN";
-const slice ROLE_MINTER = "MINTER";
-const slice ROLE_OPERATOR = "OPERATOR";
+const int ROLE_ADMIN = 0;
+const int ROLE_MINTER = 1;
+const int ROLE_OPERATOR = 2;
 
 builder store_msg_flag(builder b, int msg_flag) inline { return b.store_uint(msg_flag, 6); }
 

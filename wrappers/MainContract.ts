@@ -36,6 +36,19 @@ export class MainContract implements Contract {
     });
   }
 
+  async sendTransaction(
+    provider: ContractProvider,
+    sender: Sender,
+    value: bigint,
+    body: Cell
+  ) {
+    await provider.internal(sender, {
+      value,
+      sendMode: SendMode.PAY_GAS_SEPARATELY,
+      body,
+    });
+  }
+
   async getData(provider: ContractProvider) {
     const { stack } = await provider.get("get_jetton_data", []);
 
@@ -60,5 +73,42 @@ export class MainContract implements Contract {
     ]);
 
     return stack.readAddress();
+  }
+
+  async getPurchaseReturn(provider: ContractProvider, reserveToken: number) {
+    const { stack } = await provider.get("get_purchase_return", [
+      {
+        type: "int",
+        value: BigInt(reserveToken),
+      },
+    ]);
+
+    return stack.readBigNumber();
+  }
+
+  async getSaleReturn(provider: ContractProvider, sellAmt: number) {
+    const { stack } = await provider.get("get_sale_return", [
+      {
+        type: "int",
+        value: BigInt(sellAmt),
+      },
+    ]);
+
+    return stack.readBigNumber();
+  }
+
+  async getHasRole(provider: ContractProvider, address: Cell, role: number) {
+    const { stack } = await provider.get("get_has_role", [
+      {
+        type: "slice",
+        cell: address,
+      },
+      {
+        type: "int",
+        value: BigInt(role),
+      },
+    ]);
+
+    return stack.readBigNumber();
   }
 }
