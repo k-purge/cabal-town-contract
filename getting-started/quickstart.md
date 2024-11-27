@@ -1,9 +1,9 @@
 ---
+icon: file-signature
 description: Ton Network Jetton Smart Contract
-icon: bullseye-arrow
 ---
 
-# Quickstart
+# Jetton Smart Contract
 
 <figure><img src="https://miro.medium.com/v2/resize:fit:1400/1*cPImuKaGiSDnDj9dDttN-Q.jpeg" alt=""><figcaption></figcaption></figure>
 
