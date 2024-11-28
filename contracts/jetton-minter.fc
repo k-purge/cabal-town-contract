@@ -322,8 +322,7 @@ int cal_sale_return(int sell_amt, int circulating_supply, int reserve_rate, int 
     if (op == op::update_bonding_curve_data()) {
       throw_unless(error::unauthorized_update_request, has_role(sender_address, ROLE_OPERATOR)); ;; Only OPERATOR can update bonding curve
       int new_reserve_rate = in_msg_body~load_uint(32);
-      int new_reserve_balance = in_msg_body~load_uint(64);
-      save_data(total_supply, circulating_supply, new_reserve_rate, new_reserve_balance, admin_address, content, jetton_wallet_code, roles);
+      save_data(total_supply, circulating_supply, new_reserve_rate, reserve_balance, admin_address, content, jetton_wallet_code, roles);
       return ();
     }
 

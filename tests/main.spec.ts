@@ -271,4 +271,79 @@ describe("Test jetton minter", () => {
     const getData = await myContract.getData();
     expect(getData.supply).toEqual(10000000000000000n + 1000000000n);
   });
+
+  it("test update bonding curve failed", async () => {
+    const roleRef = beginCell().storeUint(1, 8).endCell(); // 1 ~= MINTER ROLE
+
+    const body = beginCell()
+      .storeUint(41, 32) // op code 41 -> update bonding curve
+      .storeUint(1, 64)
+      .storeUint(5000, 32)
+      .storeRef(roleRef)
+      .endCell();
+
+    sentMessageResult = await myContract.sendTransaction(
+      senderWallet.getSender(),
+      toNano("0.1"),
+      body
+    );
+
+    expect(sentMessageResult.transactions).toHaveTransaction({
+      from: senderWallet.address,
+      to: myContract.address,
+      success: false,
+    });
+  });
+
+  it("test update bonding curve success", async () => {
+    const roleRef = beginCell().storeUint(2, 8).endCell(); // 1 ~= OPERATOR ROLE
+    const rr = 5000n;
+
+    const roleBody = beginCell()
+      .storeUint(81, 32) // op code 81 -> add role
+      .storeUint(1, 64)
+      .storeAddress(senderWallet.address)
+      .storeRef(roleRef)
+      .endCell();
+
+    sentMessageResult = await myContract.sendTransaction(
+      senderWallet.getSender(),
+      toNano("0.1"),
+      roleBody
+    );
+
+    expect(sentMessageResult.transactions).toHaveTransaction({
+      from: senderWallet.address,
+      to: myContract.address,
+      success: true,
+    });
+
+    const addressCell = beginCell()
+      .storeAddress(senderWallet.address)
+      .endCell();
+    const hasRole = await myContract.getHasRole(addressCell, 2);
+
+    expect(hasRole).toEqual(-1n);
+
+    const body = beginCell()
+      .storeUint(41, 32) // op code 41 -> update bonding curve
+      .storeUint(1, 64)
+      .storeUint(rr, 32)
+      .endCell();
+
+    sentMessageResult = await myContract.sendTransaction(
+      senderWallet.getSender(),
+      toNano("0.1"),
+      body
+    );
+
+    expect(sentMessageResult.transactions).toHaveTransaction({
+      from: senderWallet.address,
+      to: myContract.address,
+      success: true,
+    });
+
+    const getData = await myContract.getData();
+    expect(getData.reserveRate).toEqual(rr);
+  });
 });
