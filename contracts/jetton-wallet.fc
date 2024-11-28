@@ -326,7 +326,7 @@ This is suitable for most tokens, if you need tokens transferable between workch
   ;; Withdraw tons or jettons which accidentally were sent to this jettonWallet
   if (op == op::withdraw_tons()) {
     throw_unless(error::unauthorized_transfer, equal_slices(owner_address, sender_address));
-    raw_reserve(wallet_min_ton_balance, 0);
+    raw_reserve(MIN_RESERVE_BALANCE, 0);
     var msg = begin_cell()
             .store_msg_flag(msgflag::BOUNCEABLE)
             .store_slice(owner_address)

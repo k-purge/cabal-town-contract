@@ -19,7 +19,7 @@
       ds~load_msg_addr(), ;; admin_address
       ds~load_ref(), ;; content
       ds~load_ref(),  ;; jetton_wallet_code
-      ds~load_dict() ;; Dictionary to store user roles
+      ds~load_dict() ;; roles dictionary
   );
 }
 
@@ -52,18 +52,10 @@ int has_role(slice address, int role) inline {
     throw_unless(error::pool_workchain_unmatched, wc == 0);
 
     ;; Attempt to retrieve the role from the dictionary
-    (slice selected_role_slice, int found?) = roles.udict_get?(ADDR_SIZE, addr_hash);
+    (slice role_slice, int found?) = roles.udict_get?(ADDR_SIZE, addr_hash);
 
     ;; Check if the role was found in the dictionary
-    if (found?) {
-      ;; Safely load the role value from the slice
-      int selected_role = selected_role_slice~load_uint(8);
-
-      ;; Return whether the role matches
-      return (role == selected_role);
-    }
-
-     return 0; ;; Role not found
+    return (found? & (role_slice~load_uint(8) == role));
 }
 
 ;; Add a role to an address (only ADMIN can do this)
@@ -94,6 +86,10 @@ int has_role(slice address, int role) inline {
 ;; Formula:
 ;; _supply * (((1 + _depositAmount / _reservedBalance) ^ (1 / _connectorWeight)) - 1)
 int cal_purchase_return(int reserve_token_received, int circulating_supply, int reserve_rate, int reserve_balance) impure inline {
+    if (reserve_balance < MIN_RESERVE_BALANCE) {
+        return 0;
+    }
+
     ;; Step 1: Compute the fraction (_depositAmount / _reservedBalance)
     int fraction = muldivr(reserve_token_received, 1 << 248, reserve_balance);
     
@@ -113,9 +109,7 @@ int cal_purchase_return(int reserve_token_received, int circulating_supply, int 
     int adjusted_exp = exp_value - (1 << 248);
     
     ;; Step 7: Multiply by _supply to compute the final purchase return
-    int purchase_return = muldivr(circulating_supply, adjusted_exp, 1 << 248);
-    
-    return purchase_return;
+    return  muldivr(circulating_supply, adjusted_exp, 1 << 248);
 }
 
 ;; Formula:
@@ -123,7 +117,7 @@ int cal_purchase_return(int reserve_token_received, int circulating_supply, int 
 ;; Return = _connectorBalance * (1 - exp((10000 / _connectorWeight) * log(1 - _sellAmount / _supply)))
 int cal_sale_return(int sell_amt, int circulating_supply, int reserve_rate, int reserve_balance) impure inline {
     ;; Ensure circulating_supply and sell_amt are non-zero to avoid division by zero
-    if ((circulating_supply == 0) | (sell_amt == 0)) {
+    if ((circulating_supply == 0) | (sell_amt == 0) | sell_amt > circulating_supply) {
         return 0;  ;; No tokens to convert or no supply, return zero
     }
 
@@ -135,16 +129,14 @@ int cal_sale_return(int sell_amt, int circulating_supply, int reserve_rate, int 
     ;; Step 1: Compute log(1 - _sellAmount / _supply)
     int log_value = fixed248::log((1 << 248) - muldivr(sell_amt, 1 << 248, circulating_supply));
     
-    ;; Step 2: Scale log_value by (1000000 / _connectorWeight)
+    ;; Step 2: Scale log_value by (10000 / _connectorWeight)
     int scaled_log = muldivr(log_value, RATE_SCALER, reserve_rate);
     
     ;; Step 3: Compute exp(scaled_log)
     int exp_value = fixed248::exp(scaled_log);
     
     ;; Step 4: Compute the final return
-    int result = muldivr(reserve_balance, (1 << 248) - exp_value, 1 << 248);
-    
-    return result;
+    return muldivr(reserve_balance, (1 << 248) - exp_value, 1 << 248);
 }
 
 () transfer_buy_tokens(slice sender_address, int jettonAmt, cell jetton_wallet_code, int value) impure {
@@ -224,7 +216,7 @@ int cal_sale_return(int sell_amt, int circulating_supply, int reserve_rate, int 
 
   ;; Transfer TON from buyer to the contract
   ;; throw if not enough msg_value
-  throw_unless(error::not_enough_tons, msg_value > 0);
+  throw_unless(error::not_enough_message_value, msg_value > 0);
 
   int new_reserve_balance = reserve_balance + reserve_token_received;
   
@@ -239,11 +231,14 @@ int cal_sale_return(int sell_amt, int circulating_supply, int reserve_rate, int 
   save_data(total_supply, circulating_supply, reserve_rate, new_reserve_balance, admin_address, content, jetton_wallet_code, roles);
 }
 
-() sell_tokens(slice sender_address, int sell_amt) impure {
+() sell_tokens(slice sender_address, int sell_amt, int my_balance) impure {
   var (total_supply, circulating_supply, reserve_rate, reserve_balance, admin_address, content, jetton_wallet_code, roles) = load_data();
+  throw_unless(error::not_enough_jettons, circulating_supply >= sell_amt);
 
   ;; Calculate the sale return in ton
   int sale_return = cal_sale_return(sell_amt, circulating_supply, reserve_rate, reserve_balance);
+  throw_unless(error::not_enough_reserve_balance, reserve_balance >= sale_return);
+  throw_unless(error::not_enough_tons, my_balance >= sale_return);
 
   transfer_sell_tokens(sender_address, sell_amt, sale_return, jetton_wallet_code);
 
@@ -302,7 +297,7 @@ int cal_sale_return(int sell_amt, int circulating_supply, int reserve_rate, int 
     ;; Sell tokens
     if (op == op::sell_token()) {
         int sell_amt = in_msg_body~load_coins();
-        sell_tokens(sender_address, sell_amt);
+        sell_tokens(sender_address, sell_amt, my_balance);
         return ();
     }
 

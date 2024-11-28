@@ -11,6 +11,8 @@ const int error::malformed_forward_payload = 708;
 const int error::not_enough_tons = 709;
 const int error::burn_fee_not_matched = 710;
 const int error::unauthorized_burn_request = 711;
+const int error::not_enough_reserve_balance = 712;
+const int error::not_enough_message_value = 713;
 const int error::unknown_action = 0xFFFF;
 const int error::unknown_action_bounced = 0xFFF0;
 
