@@ -139,7 +139,7 @@ int cal_sale_return(int sell_amt, int circulating_supply, int reserve_rate, int 
     return muldivr(reserve_balance, (1 << 248) - exp_value, 1 << 248);
 }
 
-() transfer_buy_tokens(slice sender_address, int jettonAmt, cell jetton_wallet_code, int value) impure {
+() transfer_buy_tokens(slice sender_address, int jettonAmt, cell jetton_wallet_code) impure {
   ;; BUY jettons
   cell state_init = calculate_jetton_wallet_state_init(sender_address, my_address(), jetton_wallet_code);
   slice jetton_wallet_address = calculate_jetton_wallet_address(state_init);
@@ -159,7 +159,7 @@ int cal_sale_return(int sell_amt, int circulating_supply, int reserve_rate, int 
   var msg = begin_cell()
     .store_uint(msgflag::BOUNCEABLE, 6)
     .store_slice(jetton_wallet_address)
-    .store_coins(value) ;; for transferToJWallet
+    .store_coins(WALLET_FORWARD_FEE) ;; for transferToJWallet
     .store_uint(4 + 2 + 1, 1 + 4 + 4 + 64 + 32 + 1 + 1 + 1)
     .store_ref(state_init)
     .store_ref(master_msg);
@@ -216,15 +216,16 @@ int cal_sale_return(int sell_amt, int circulating_supply, int reserve_rate, int 
 
   ;; Transfer TON from buyer to the contract
   ;; throw if not enough msg_value
-  throw_unless(error::not_enough_message_value, msg_value > 0);
+  int cost = reserve_token_received + FORWARD_FEE + WALLET_FORWARD_FEE; ;; 2 messages: master->wal1, wal1->response
+  throw_unless(error::not_enough_message_value, msg_value > cost);
 
   int new_reserve_balance = reserve_balance + reserve_token_received;
   
   ;; Calculate the cost using sigmoid bonding curve
-  int purchase_amt = cal_purchase_return(reserve_token_received, circulating_supply, reserve_rate, new_reserve_balance);
+  int purchase_amt = cal_purchase_return(reserve_token_received, circulating_supply, reserve_rate, reserve_balance);
 
   ;; Transfer tokens from contract to buyer
-  transfer_buy_tokens(sender_address, purchase_amt, jetton_wallet_code, msg_value);
+  transfer_buy_tokens(sender_address, purchase_amt, jetton_wallet_code);
 
   ;; Increase circulating supply
   circulating_supply += purchase_amt;
