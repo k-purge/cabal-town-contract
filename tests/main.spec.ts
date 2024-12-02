@@ -129,7 +129,7 @@ describe("Test jetton minter", () => {
 
     sentMessageResult = await myContract.sendTransaction(
       senderWallet.getSender(),
-      toNano("0.05"),
+      toNano("1.5"),
       body
     );
 
