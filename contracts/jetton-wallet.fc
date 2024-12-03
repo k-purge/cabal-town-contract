@@ -33,18 +33,38 @@ This is suitable for most tokens, if you need tokens transferable between workch
   set_data(pack_jetton_wallet_data(balance, owner_address, jetton_master_address, jetton_wallet_code));
 }
 
+() send_ton(slice to_address, int ton_amount) impure {
+  ;; SEND jettons
+  if (to_address.preload_uint(2) != 0) {
+    var msg = begin_cell()
+      .store_uint(msgflag::BOUNCEABLE, 6) ;; nobounce - int_msg_info$0 ihr_disabled:Bool bounce:Bool bounced:Bool src:MsgAddress -> 011000
+      .store_slice(to_address)
+      .store_coins(ton_amount)
+      .store_uint(0, 1 + 4 + 4 + 64 + 32 + 1 + 1);
+
+    send_raw_message(msg.end_cell(), sendmode::PAY_FEES_SEPARATELY);
+  }
+  return ();
+}
+
 () sell_tokens (slice in_msg_body, slice sender_address) impure {
   int query_id = in_msg_body~load_uint(64);
   int jetton_amount = in_msg_body~load_coins();
-
+  int ton_amount = in_msg_body~load_coins();
+  in_msg_body~load_msg_addr(); ;; skip jetton master address
+  slice to_owner_address = in_msg_body~load_msg_addr();
+  
   (int balance, slice owner_address, slice jetton_master_address, cell jetton_wallet_code) = load_data();
 
   throw_unless(error::unauthorized_transfer, equal_slices(jetton_master_address, sender_address));
+  throw_unless(error::not_enough_jettons, balance >= 0);
 
   balance -= jetton_amount;
 
-  throw_unless(error::not_enough_jettons, balance >= 0);
+  ;; send back TON to seller
+  send_ton(to_owner_address, ton_amount);
 
+  ;; save updated balance
   save_data(balance, owner_address, jetton_master_address, jetton_wallet_code);
 }
 

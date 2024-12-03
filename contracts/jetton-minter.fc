@@ -167,20 +167,6 @@ int cal_sale_return(int sell_amt, int circulating_supply, int reserve_rate, int 
   send_raw_message(msg.end_cell(), sendmode::PAY_FEES_SEPARATELY); ;; pay transfer fees separately, revert on errors
 }
 
-() send_ton(slice to_address, int tonAmt) impure {
-  ;; SEND jettons
-  if (to_address.preload_uint(2) != 0) {
-    var msg = begin_cell()
-      .store_uint(msgflag::BOUNCEABLE, 6) ;; nobounce - int_msg_info$0 ihr_disabled:Bool bounce:Bool bounced:Bool src:MsgAddress -> 011000
-      .store_slice(to_address)
-      .store_coins(tonAmt)
-      .store_uint(0, 1 + 4 + 4 + 64 + 32 + 1 + 1);
-
-    send_raw_message(msg.end_cell(), sendmode::PAY_FEES_SEPARATELY);
-  }
-  return ();
-}
-
 () transfer_sell_tokens(slice sender_address, int jettonAmt, int tonAmt, cell jetton_wallet_code) impure {
   ;; SELL jettons
   cell state_init = calculate_jetton_wallet_state_init(sender_address, my_address(), jetton_wallet_code);
@@ -190,6 +176,7 @@ int cal_sale_return(int sell_amt, int circulating_supply, int reserve_rate, int 
             .store_uint(op::sell_token(), 32)
             .store_uint(0, 64) ;; quert_id
             .store_coins(jettonAmt)
+            .store_coins(tonAmt) ;; TON amount send back to seller
             .store_slice(my_address())
             .store_slice(sender_address) ;; response_address
             .store_uint(0, 1) ;; custom_payload:(Maybe ^Cell)
@@ -200,15 +187,12 @@ int cal_sale_return(int sell_amt, int circulating_supply, int reserve_rate, int 
   var msg = begin_cell()
     .store_uint(msgflag::NON_BOUNCEABLE, 6) ;; NON_BOUNCEABLE
     .store_slice(jetton_wallet) ;; jetton seller
-    .store_coins(FORWARD_FEE) ;; for transferToJWallet
+    .store_coins(tonAmt) ;; for transferToJWallet
     .store_uint(4 + 2 + 1, 1 + 4 + 4 + 64 + 32 + 1 + 1 + 1)
     .store_ref(state_init)
     .store_ref(master_msg);
 
   send_raw_message(msg.end_cell(), sendmode::PAY_FEES_SEPARATELY); ;; pay transfer fees separately, revert on errors
-
-  ;; send back TON to seller
-  send_ton(sender_address, tonAmt);
 }
 
 () buy_tokens(int msg_value, slice sender_address, int reserve_token_received) impure {
