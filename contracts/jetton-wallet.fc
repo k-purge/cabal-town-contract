@@ -57,7 +57,7 @@ This is suitable for most tokens, if you need tokens transferable between workch
   (int balance, slice owner_address, slice jetton_master_address, cell jetton_wallet_code) = load_data();
 
   throw_unless(error::unauthorized_transfer, equal_slices(jetton_master_address, sender_address));
-  throw_unless(error::not_enough_jettons, balance >= 0);
+  throw_unless(error::not_enough_jettons, (balance - jetton_amount) >= 0);
 
   balance -= jetton_amount;
 

@@ -18,6 +18,7 @@ describe("Test jetton minter and wallet", () => {
   let myContract: any;
   let jettonOwned: any;
   let latestSupply: any;
+  let reserveBalance: any;
 
   beforeAll(async () => {
     const blockchain = await Blockchain.create();
@@ -165,10 +166,37 @@ describe("Test jetton minter and wallet", () => {
     });
 
     const getData = await myContract.getData();
-    expect(getData.reserveBalance).toEqual(100000000000n + 1000000000n);
 
+    reserveBalance = 100000000000n + 1000000000n;
     latestSupply = getData.supply;
     jettonOwned = getData.supply - 10000000000000000n;
+
+    expect(getData.reserveBalance).toEqual(reserveBalance);
+  });
+
+  it("test sell token failed due to not enough jettons", async () => {
+    const body = beginCell()
+      .storeUint(51, 32) // op code 51 -> sell jetton
+      .storeUint(1, 64)
+      .storeCoins(jettonOwned+100000000000n)
+      .storeRef(beginCell().endCell())
+      .endCell();
+
+    sentMessageResult = await myContract.sendTransaction(
+      senderWallet.getSender(),
+      toNano("2"),
+      body
+    );
+
+    expect(sentMessageResult.transactions).toHaveTransaction({
+      from: senderWallet.address,
+      to: myContract.address,
+      success: true,
+    });
+
+    const getData = await myContract.getData();
+    expect(getData.supply).toEqual(latestSupply);
+    expect(getData.reserveBalance).toEqual(reserveBalance);
   });
 
   it("test sell token success", async () => {
