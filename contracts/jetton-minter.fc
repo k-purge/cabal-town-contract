@@ -139,27 +139,27 @@ int cal_sale_return(int sell_amt, int circulating_supply, int reserve_rate, int 
     return muldivr(reserve_balance, (1 << 248) - exp_value, 1 << 248);
 }
 
-() transfer_buy_tokens(slice sender_address, int jettonAmt, cell jetton_wallet_code) impure {
+() transfer_buy_tokens(slice sender_address, int jetton_amount, int reserve_token_received, int wallet_forward_fee, cell jetton_wallet_code) impure {
   ;; BUY jettons
   cell state_init = calculate_jetton_wallet_state_init(sender_address, my_address(), jetton_wallet_code);
-  slice jetton_wallet_address = calculate_jetton_wallet_address(state_init);
-  slice from_wallet_address = my_address();
-  slice to_wallet_address = sender_address;
+  slice jetton_wallet = calculate_jetton_wallet_address(state_init);
 
   var master_msg = begin_cell()
             .store_uint(op::internal_transfer(), 32)
             .store_uint(0, 64) ;; quert_id
-            .store_coins(jettonAmt)
-            .store_slice(to_wallet_address) ;; from_address
-            .store_slice(to_wallet_address) ;; response_address
+            .store_coins(jetton_amount)
+            .store_uint(op::buy_token(), 32) ;; original op code
+            .store_coins(reserve_token_received) ;; ton received
+            .store_slice(sender_address) ;; from_address
+            .store_slice(sender_address) ;; response_address
             .store_coins(FORWARD_FEE) ;; forward_amount
             .store_uint(0, 1) ;; forward_payload in this slice, not separate cell
             .end_cell();
 
   var msg = begin_cell()
     .store_uint(msgflag::BOUNCEABLE, 6)
-    .store_slice(jetton_wallet_address)
-    .store_coins(WALLET_FORWARD_FEE) ;; for transferToJWallet
+    .store_slice(jetton_wallet) ;; jetton seller
+    .store_coins(wallet_forward_fee) ;; for transferToJWallet
     .store_uint(4 + 2 + 1, 1 + 4 + 4 + 64 + 32 + 1 + 1 + 1)
     .store_ref(state_init)
     .store_ref(master_msg);
@@ -167,7 +167,7 @@ int cal_sale_return(int sell_amt, int circulating_supply, int reserve_rate, int 
   send_raw_message(msg.end_cell(), sendmode::PAY_FEES_SEPARATELY); ;; pay transfer fees separately, revert on errors
 }
 
-() transfer_sell_tokens(slice sender_address, int jettonAmt, int tonAmt, cell jetton_wallet_code) impure {
+() transfer_sell_tokens(slice sender_address, int jetton_amount, int ton_amount, cell jetton_wallet_code) impure {
   ;; SELL jettons
   cell state_init = calculate_jetton_wallet_state_init(sender_address, my_address(), jetton_wallet_code);
   slice jetton_wallet = calculate_jetton_wallet_address(state_init);
@@ -175,8 +175,8 @@ int cal_sale_return(int sell_amt, int circulating_supply, int reserve_rate, int 
   var master_msg = begin_cell()
             .store_uint(op::sell_token(), 32)
             .store_uint(0, 64) ;; quert_id
-            .store_coins(jettonAmt)
-            .store_coins(tonAmt) ;; TON amount send back to seller
+            .store_coins(jetton_amount)
+            .store_coins(ton_amount) ;; TON amount send back to seller
             .store_slice(my_address())
             .store_slice(sender_address) ;; response_address
             .store_uint(0, 1) ;; custom_payload:(Maybe ^Cell)
@@ -185,9 +185,9 @@ int cal_sale_return(int sell_amt, int circulating_supply, int reserve_rate, int 
             .end_cell();
 
   var msg = begin_cell()
-    .store_uint(msgflag::NON_BOUNCEABLE, 6) ;; NON_BOUNCEABLE
+    .store_uint(msgflag::BOUNCEABLE, 6)
     .store_slice(jetton_wallet) ;; jetton seller
-    .store_coins(tonAmt) ;; for transferToJWallet
+    .store_coins(ton_amount) ;; for transferToJWallet
     .store_uint(4 + 2 + 1, 1 + 4 + 4 + 64 + 32 + 1 + 1 + 1)
     .store_ref(state_init)
     .store_ref(master_msg);
@@ -200,8 +200,10 @@ int cal_sale_return(int sell_amt, int circulating_supply, int reserve_rate, int 
 
   ;; Transfer TON from buyer to the contract
   ;; throw if not enough msg_value
-  int cost = reserve_token_received + FORWARD_FEE + WALLET_FORWARD_FEE; ;; 2 messages: master->wal1, wal1->response
+  int cost = reserve_token_received + (FORWARD_FEE * 2); ;; 2 messages: master->wal1, wal1->response
   throw_unless(error::not_enough_message_value, msg_value > cost);
+
+  int wallet_forward_fee = msg_value - cost;
 
   int new_reserve_balance = reserve_balance + reserve_token_received;
   
@@ -209,7 +211,7 @@ int cal_sale_return(int sell_amt, int circulating_supply, int reserve_rate, int 
   int purchase_amt = cal_purchase_return(reserve_token_received, circulating_supply, reserve_rate, reserve_balance);
 
   ;; Transfer tokens from contract to buyer
-  transfer_buy_tokens(sender_address, purchase_amt, jetton_wallet_code);
+  transfer_buy_tokens(sender_address, purchase_amt, reserve_token_received, wallet_forward_fee, jetton_wallet_code);
 
   ;; Increase circulating supply
   circulating_supply += purchase_amt;
@@ -233,19 +235,34 @@ int cal_sale_return(int sell_amt, int circulating_supply, int reserve_rate, int 
   save_data(total_supply, circulating_supply, reserve_rate, reserve_balance, admin_address, content, jetton_wallet_code, roles);
 }
 
-() mint_tokens(slice to_address, cell jetton_wallet_code, int amount, cell master_msg) impure {
-  var (_, _, _, _, admin_address, _, _, _) = load_data();
+() mint_tokens(slice to_address, int jetton_amount) impure {
+  var (total_supply, circulating_supply, reserve_rate, reserve_balance, admin_address, content, jetton_wallet_code, roles) = load_data();
 
   cell state_init = calculate_jetton_wallet_state_init(to_address, my_address(), jetton_wallet_code);
-  slice to_wallet_address = calculate_jetton_wallet_address(state_init);
+  slice jetton_wallet = calculate_jetton_wallet_address(state_init);
+
+  ;; constuct mint token master msg
+  var master_msg = begin_cell()
+            .store_uint(op::internal_transfer(), 32)
+            .store_uint(0, 64) ;; quert_id
+            .store_coins(jetton_amount)
+            .store_uint(op::mint(), 32)
+            .store_slice(my_address()) ;; from_address
+            .store_slice(to_address) ;; response_address
+            .store_coins(FORWARD_FEE) ;; forward_amount
+            .store_uint(0, 1) ;; forward_payload in this slice, not separate cell
+            .end_cell();
+
   var msg = begin_cell()
     .store_uint(msgflag::BOUNCEABLE, 6)
-    .store_slice(to_wallet_address)
-    .store_coins(amount)
+    .store_slice(jetton_wallet)
+    .store_coins(FORWARD_FEE)
     .store_uint(4 + 2 + 1, 1 + 4 + 4 + 64 + 32 + 1 + 1 + 1)
     .store_ref(state_init)
     .store_ref(master_msg);
-  send_raw_message(msg.end_cell(), sendmode::PAY_FEES_SEPARATELY); ;; pay transfer fees separately, revert on errors
+    
+  send_raw_message(msg.end_cell(), sendmode::CARRY_ALL_REMAINING_MESSAGE_VALUE); ;; pay transfer fees separately, revert on errors
+  save_data(total_supply + jetton_amount, circulating_supply + jetton_amount, reserve_rate, reserve_balance, admin_address, content, jetton_wallet_code, roles);
 }
 
 () recv_internal(int my_balance, int msg_value, cell in_msg_full, slice in_msg_body) impure {
@@ -258,8 +275,73 @@ int cal_sale_return(int sell_amt, int circulating_supply, int reserve_rate, int 
     slice cs = in_msg_full.begin_parse();
     int flags = cs~load_uint(4);
 
-    ;; Ignore bounced messages
+    ;; Handle bounced messages
     if (flags & 1) {
+        ;; Parse the bounced message
+        slice sender_address = cs~load_msg_addr();
+
+        in_msg_body~skip_bits(32); ;; 0xFFFFFFFF
+
+        int op = in_msg_body~load_uint(32);
+        int query_id = in_msg_body~load_uint(64);
+
+        ;; Load contract state
+        var (total_supply, circulating_supply, reserve_rate, reserve_balance, admin_address, content, jetton_wallet_code, roles) = load_data();
+
+        ;; Verify and parse the operation code
+        if (op == 51) { ;; Fall into bounced sell operation
+            int jettonAmt = in_msg_body~load_coins();
+            int tonAmt = in_msg_body~load_coins();
+            
+            ;; Deduct the minted amount from the total and circulating supply
+            save_data(
+                total_supply,
+                circulating_supply + jettonAmt,
+                reserve_rate,
+                reserve_balance + tonAmt,
+                admin_address,
+                content,
+                jetton_wallet_code,
+                roles
+            );
+            return ();
+        }
+
+        int amount = in_msg_body~load_coins();
+        int original_op = in_msg_body~load_uint(32);
+
+        if (original_op == 21) { ;; Fall into bounced minting operation
+            ;; Deduct the minted amount from the total and circulating supply
+            save_data(
+                total_supply - amount,
+                circulating_supply - amount,
+                reserve_rate,
+                reserve_balance,
+                admin_address,
+                content,
+                jetton_wallet_code,
+                roles
+            );
+            return ();
+        }
+
+        if (original_op == 31) { ;; Fall into bounced buy token operation
+            int ton_received = in_msg_body~load_coins();
+            ;; Deduct the buy amount from the total and circulating supply
+            save_data(
+                total_supply,
+                circulating_supply - amount,
+                reserve_rate,
+                reserve_balance - ton_received,
+                admin_address,
+                content,
+                jetton_wallet_code,
+                roles
+            );
+            return ();
+        }
+
+        ;; If the operation is not recognized, ignore the bounced message
         return ();
     }
 
@@ -311,16 +393,9 @@ int cal_sale_return(int sell_amt, int circulating_supply, int reserve_rate, int 
     if (op == op::mint()) {
         throw_unless(error::unauthorized_mint_request, has_role(sender_address, ROLE_MINTER)); ;; Only MINTER can mint
         slice to_address = in_msg_body~load_msg_addr();
-        int amount = in_msg_body~load_coins();
-        cell master_msg = in_msg_body~load_ref();
-        
-        ;; Parse the master message
-        slice master_msg_cs = master_msg.begin_parse();
-        master_msg_cs~skip_bits(32 + 64); ;; Skip op and query_id
-        int jetton_amount = master_msg_cs~load_coins();
+        int jetton_amount = in_msg_body~load_coins();
 
-        mint_tokens(to_address, jetton_wallet_code, amount, master_msg);
-        save_data(total_supply + jetton_amount, circulating_supply + jetton_amount, reserve_rate, reserve_balance, admin_address, content, jetton_wallet_code, roles);
+        mint_tokens(to_address, jetton_amount);
         return ();
     }
 
