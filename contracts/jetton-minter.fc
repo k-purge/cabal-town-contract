@@ -205,7 +205,6 @@ int cal_sale_return(int sell_amt, int circulating_supply, int reserve_rate, int 
 
   int wallet_forward_fee = msg_value - cost;
 
-  int new_reserve_balance = reserve_balance + reserve_token_received;
   
   ;; Calculate the cost using sigmoid bonding curve
   int purchase_amt = cal_purchase_return(reserve_token_received, circulating_supply, reserve_rate, reserve_balance);
@@ -215,7 +214,12 @@ int cal_sale_return(int sell_amt, int circulating_supply, int reserve_rate, int 
 
   ;; Increase circulating supply
   circulating_supply += purchase_amt;
-  save_data(total_supply, circulating_supply, reserve_rate, new_reserve_balance, admin_address, content, jetton_wallet_code, roles);
+  ;; Increase total supply
+  total_supply += purchase_amt;
+  ;; Increase reserve_balance
+  reserve_balance += reserve_token_received;
+
+  save_data(total_supply, circulating_supply, reserve_rate, reserve_balance, admin_address, content, jetton_wallet_code, roles);
 }
 
 () sell_tokens(slice sender_address, int sell_amt, int my_balance) impure {
@@ -229,8 +233,11 @@ int cal_sale_return(int sell_amt, int circulating_supply, int reserve_rate, int 
 
   transfer_sell_tokens(sender_address, sell_amt, sale_return, jetton_wallet_code);
 
-  ;; Increase circulating supply
+  ;; Decrease circulating supply
   circulating_supply -= sell_amt;
+  ;; Decrease total supply
+  total_supply -= sell_amt;
+  ;; Decrease reserve_balance
   reserve_balance -= sale_return;
   save_data(total_supply, circulating_supply, reserve_rate, reserve_balance, admin_address, content, jetton_wallet_code, roles);
 }
@@ -295,7 +302,7 @@ int cal_sale_return(int sell_amt, int circulating_supply, int reserve_rate, int 
             
             ;; Deduct the minted amount from the total and circulating supply
             save_data(
-                total_supply,
+                total_supply + jettonAmt,
                 circulating_supply + jettonAmt,
                 reserve_rate,
                 reserve_balance + tonAmt,
@@ -329,7 +336,7 @@ int cal_sale_return(int sell_amt, int circulating_supply, int reserve_rate, int 
             int ton_received = in_msg_body~load_coins();
             ;; Deduct the buy amount from the total and circulating supply
             save_data(
-                total_supply,
+                total_supply - amount,
                 circulating_supply - amount,
                 reserve_rate,
                 reserve_balance - ton_received,
