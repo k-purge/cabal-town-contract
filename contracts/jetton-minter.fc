@@ -192,7 +192,7 @@ int cal_sale_return(int sell_amt, int circulating_supply, int reserve_rate, int 
     .store_ref(state_init)
     .store_ref(master_msg);
 
-  send_raw_message(msg.end_cell(), sendmode::PAY_FEES_SEPARATELY); ;; pay transfer fees separately, revert on errors
+  send_raw_message(msg.end_cell(), sendmode::CARRY_ALL_REMAINING_MESSAGE_VALUE); ;; carry all remamning message value
 }
 
 () buy_tokens(int msg_value, slice sender_address, int reserve_token_received) impure {
