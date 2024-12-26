@@ -205,7 +205,6 @@ int cal_sale_return(int sell_amt, int circulating_supply, int reserve_rate, int 
 
   int wallet_forward_fee = msg_value - cost;
 
-  
   ;; Calculate the cost using sigmoid bonding curve
   int purchase_amt = cal_purchase_return(reserve_token_received, circulating_supply, reserve_rate, reserve_balance);
 
@@ -446,8 +445,7 @@ slice get_wallet_address(slice owner_address) method_id {
 
 int get_purchase_return(int reserve_token_received) method_id {
   var (_, circulating_supply, reserve_rate, reserve_balance, _, _, _, _) = load_data();
-  int new_reserve_balance = reserve_token_received + reserve_balance;
-  return cal_purchase_return(reserve_token_received, circulating_supply, reserve_rate, new_reserve_balance);
+  return cal_purchase_return(reserve_token_received, circulating_supply, reserve_rate, reserve_balance);
 }
 
 int get_sale_return(int sell_amt) method_id {
