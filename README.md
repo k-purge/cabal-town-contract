@@ -1,27 +1,12 @@
 # Cabal.town - Contract
 
-Cabal.town is a social survival game that rewards the most loyals. The app combines crypto, social interaction, and gamified elements to create a fun and rewarding experience.
+Cabal Town is the social monetization layer of on-chain markets, offering a novel approach to community interaction in crypto trading and token discovery. It enables influencers to monetize their influence and unique insights while fostering deeper engagement within their communities.
 
-### How do I start?
+* Early token discovery has been a challenge with the lack of capability to measure the quality of the alpha. The paid marketing models embedded in discovery platform like dexscreener/dextool also creates more noise than true signal.
 
-**You can start** by buying a token on the bonding curve to participate in the game. Upon purchasing the buy-in amount, you will be invited to join a private group.
+* Crypto influencers currently monetize via promoting tokens to community after their entry, with late joiners usually suffer from financial loss because of late entry or ‘getting dumped on’. Friend.tech was an attempt to align incentives between attention and group entity but it failed to achieve retention due to poor product experience and tokenomics design.
 
-### How does the game work?
-
-**Before the game:** Purchase a token on the bonding curve to participate in the game.
-**Game ON:** When the token reaches 42K USD market cap, the game is created and all token holders will be invited to join a private group. The game consists of 10 rounds, each lasting 69 hours. 
-
-### What is the buy-in amount?
-
-**Buy-in amount** refers to the minimum amount for you to enter the game. For games that haven't started yet, the buy-in will be 1 token. Whereas for games that have started, the buy-in will equal the least amount of tokens the in-game participants have.
-
-### What is the reward for the final winners?
-
-**On top of** being part of a close community, you will also earn 25% of the fees generated via trading the token.
-
-### What happens at the end of the game?
-
-**At the end of the game,** the number of participants in the private group stabilizes. However, when new participants join the group, the person with the least amount of tokens will still be removed.
+* Cabal Town v1 starts with a ‘cabal’ experience for crypto influencers and alpha seekers, with tokenized group chat using cabal tokens , with social trading enabled to drive engagement and demand on the cabal tokens, and performance-driven reputation as “signal” of quality of membership.
 
 ## 🌼 Install 🌼
 
@@ -78,14 +63,6 @@ Well, now let's release our Jetton!
 
 ---
 
-## 🏭 ICO variation 🏭
-
-ICO - Initial Coin Offering - issuance by a project or company of its own money - tokens (cryptocurrency) in order to attract investment.
-
-The simplest smart contract for Initial Coin Offering is a slightly modified Jetton standard master contract, which, when sending cryptocurrencies to it, gives tokens in exchange.
-
----
-
 ## 🔌 Compile🔌  
 
 As in the previous quest, in order to use a smart contract, it must be compiled into a hexBoC format. First, we will compile the master contract, and then the wallet, the wallet will be needed to deploy the master contract:
@@ -117,59 +94,6 @@ Be sure to save the link below the quar code, it contains the address of the mas
 
 ---
 
-## 💾  Get your Master Contract Data 💾
-
-We go into the file and change the address at the top of the file on the line to the address of your master contract.
-
-![image](https://user-images.githubusercontent.com/18370291/254981215-01803c51-6831-4f07-87d1-25fc97fd2436.png)
-
-Launch!
-
-```sh
-yarn getjetton
-```
-
-If everything worked out, it's time to participate in ICO
-
----
-
-##  📀 Participate in ICO 📀
-
-To participate in the ISO, you just need to send a message to the smart contract, let's do this:
-
-```sh
-yarn send
-```
-
-What to do with the QR code you already know :) 
-The question arises how to get the balance of our Jetton wallet.
-
----
-
-##  🎰 Getting to the wallet 🎰
-
-Using the master contract, we will receive a wallet token of our address. Get method `get_wallet_address()`:
-
-
-```sh
-yarn myjettonwallet
-```
-
-Copy the address, we will use it in the `jettonwalletinfo.ts` script:
-
-![image](https://user-images.githubusercontent.com/18370291/254984237-0a17e470-bacc-435d-8c3b-4b589967d263.png)
-
-In the 12th line you need to insert the address of your wallet token, and of course run the script:
-
-```sh
-yarn jettonbalance
-```
-
-![image](https://user-images.githubusercontent.com/18370291/254985023-b11448a4-e35f-4056-a3dd-8d0e3c742a6f.png)
-
-Enjoy the balance)
-
----
 
 ✍️ Unit Test 🦾
 Run the unit test on smart contract to verify the FunC Jetton methods.
