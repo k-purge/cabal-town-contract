@@ -435,7 +435,7 @@ int cal_sale_return(int sell_amt, int circulating_supply, int reserve_rate, int 
 
 (int, int, slice, cell, cell, int, int, int) get_jetton_data() method_id {
     var (total_supply, circulating_supply, reserve_rate, reserve_balance, admin_address, content, jetton_wallet_code, roles) = load_data();
-    return (total_supply, -1, admin_address, content, jetton_wallet_code, circulating_supply, reserve_rate, reserve_balance);
+    return (total_supply, -1, admin_address, content, jetton_wallet_code, circulating_supply - INITIAL_SUPPLY, reserve_rate, reserve_balance);
 }
 
 slice get_wallet_address(slice owner_address) method_id {
